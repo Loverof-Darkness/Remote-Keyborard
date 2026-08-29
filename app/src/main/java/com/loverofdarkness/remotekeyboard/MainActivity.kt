@@ -2,6 +2,7 @@ package com.loverofdarkness.remotekeyboard
 
 import android.Manifest
 import android.app.Activity
+import android.app.AlertDialog
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.content.Context
@@ -86,8 +87,15 @@ class MainActivity : Activity() {
 
     private fun loadCustomButtons(){if(!::customPanel.isInitialized)return;while(customPanel.childCount>1)customPanel.removeViewAt(1);prefs.getStringSet("keys",emptySet())!!.toList().sorted().forEach{entry->val p=entry.split("|",limit=2);if(p.size==2){val row=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL};row.addView(keyButton(p[0]){sendSequence(p[1])},LinearLayout.LayoutParams(0,-2,1f));row.addView(Button(this).apply{text="×";setOnClickListener{prefs.edit().putStringSet("keys",prefs.getStringSet("keys",emptySet())!!.filterNot{it==entry}.toSet()).apply();loadCustomButtons()}},LinearLayout.LayoutParams(-2,-2));customPanel.addView(row)}}}
 
-    private fun sendSequence(sequence:String){if(hid?.isConnected()!=true)return;sequence.split("+").map{it.trim()}.forEach{token->HidKeyMapper.modifierFor(token)?.let{return@forEach};}
-        val tokens=sequence.split("+").map{it.trim()};var modifier=0;tokens.forEach{modifier=modifier or (HidKeyMapper.modifierFor(it)?:0)};val key=tokens.lastOrNull{HidKeyMapper.modifierFor(it)==null};val usage=key?.let{HidKeyMapper.usageFor(it)}?:return;sendKey(usage,modifier)
+    private fun sendSequence(sequence:String){
+        if(hid?.isConnected()!=true)return
+        val tokens=sequence.split("+").map{it.trim()}.filter{it.isNotEmpty()}
+        if(tokens.isEmpty())return
+        var modifier=0
+        tokens.forEach { modifier=modifier or (HidKeyMapper.modifierFor(it)?:0) }
+        val key=tokens.lastOrNull{HidKeyMapper.modifierFor(it)==null} ?: return
+        val usage=HidKeyMapper.usageFor(key) ?: return
+        sendKey(usage,modifier)
     }
 
     private fun loadPairedDevices(){val adapter=BluetoothAdapter.getDefaultAdapter()?:return;if(android.os.Build.VERSION.SDK_INT>=31&&checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT)!=PackageManager.PERMISSION_GRANTED)return;try{paired=adapter.bondedDevices.toList().sortedBy{it.name?:it.address};deviceSpinner.adapter=ArrayAdapter(this,android.R.layout.simple_spinner_dropdown_item,paired.map{"${it.name?:"Unknown"} • ${it.address}"});if(paired.isEmpty())status.text="● No paired Bluetooth devices"}catch(_:SecurityException){status.text="● Bluetooth permission required"}}
