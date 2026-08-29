@@ -13,6 +13,7 @@ import android.os.Looper
 import android.text.InputType
 import android.view.Gravity
 import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
@@ -47,7 +48,9 @@ class MainActivity : Activity() {
     }
 
     private fun requestNotificationPermission() {
-        if (android.os.Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQUEST_NOTIFICATIONS)
+        if (android.os.Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQUEST_NOTIFICATIONS)
+        }
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
@@ -104,7 +107,7 @@ class MainActivity : Activity() {
             true
         }
         button.setOnTouchListener { _, event ->
-            if(event.action==KeyEvent.ACTION_UP || event.action==android.view.MotionEvent.ACTION_CANCEL) { repeating=false;repeatHandler.removeCallbacksAndMessages(button) }
+            if(event.action==MotionEvent.ACTION_UP || event.action==MotionEvent.ACTION_CANCEL) { repeating=false;repeatHandler.removeCallbacksAndMessages(button) }
             false
         }
         return button
