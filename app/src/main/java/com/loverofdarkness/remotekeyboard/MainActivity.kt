@@ -10,12 +10,9 @@ import android.graphics.Color
 import android.os.Bundle
 import android.text.InputType
 import android.view.Gravity
-import android.view.View
-import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputConnectionWrapper
-import android.view.inputmethod.InputMethodManager
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
@@ -48,9 +45,7 @@ class MainActivity : Activity() {
             val missing = needed.filter {
                 ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
             }
-            if (missing.isNotEmpty()) {
-                ActivityCompat.requestPermissions(this, missing.toTypedArray(), 77)
-            }
+            if (missing.isNotEmpty()) ActivityCompat.requestPermissions(this, missing.toTypedArray(), 77)
         }
     }
 
@@ -81,27 +76,27 @@ class MainActivity : Activity() {
         deviceSpinner = Spinner(this)
         root.addView(deviceSpinner, LinearLayout.LayoutParams(-1, -2))
 
-        val refresh = Button(this).apply {
+        root.addView(Button(this).apply {
             text = "Refresh Paired Devices"
             setOnClickListener { loadPairedDevices() }
-        }
-        root.addView(refresh, LinearLayout.LayoutParams(-1, -2))
+        }, LinearLayout.LayoutParams(-1, -2))
 
-        val connect = Button(this).apply {
+        root.addView(Button(this).apply {
             text = "Connect"
             setOnClickListener { connectSelected() }
-        }
-        root.addView(connect, LinearLayout.LayoutParams(-1, -2))
+        }, LinearLayout.LayoutParams(-1, -2))
 
-        val disconnect = Button(this).apply {
+        root.addView(Button(this).apply {
             text = "Disconnect"
             setOnClickListener { hid?.disconnect() }
-        }
-        root.addView(disconnect, LinearLayout.LayoutParams(-1, -2))
+        }, LinearLayout.LayoutParams(-1, -2))
 
-        typeField = RemoteEditText(this) { text ->
-            if (hid?.isConnected() == true) {
-                sendText(text)
+        typeField = RemoteEditText(this) { token ->
+            if (hid?.isConnected() != true) return@RemoteEditText
+            when {
+                token == "\b" -> sendKey(HidKeyMapper.BACKSPACE)
+                token.startsWith("\u0000") -> token.substring(1).toIntOrNull()?.let(::sendKey)
+                else -> sendText(token)
             }
         }.apply {
             hint = "Tap here and type to your laptop"
@@ -117,9 +112,7 @@ class MainActivity : Activity() {
             setPadding(20, 20, 20, 20)
             setBackgroundColor(0xFF181818.toInt())
         }
-        root.addView(typeField, LinearLayout.LayoutParams(-1, 0, 1f).apply {
-            topMargin = 24
-        })
+        root.addView(typeField, LinearLayout.LayoutParams(-1, 0, 1f).apply { topMargin = 24 })
 
         setContentView(root)
         loadPairedDevices()
@@ -128,35 +121,22 @@ class MainActivity : Activity() {
     private fun loadPairedDevices() {
         val adapter = BluetoothAdapter.getDefaultAdapter() ?: return
         if (android.os.Build.VERSION.SDK_INT >= 31 &&
-            ContextCompat.checkSelfPermission(
-                this,
-                Manifest.permission.BLUETOOTH_CONNECT
-            ) != PackageManager.PERMISSION_GRANTED
+            ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED
         ) return
-
         paired = adapter.bondedDevices.toList().sortedBy { it.name ?: it.address }
-        val labels = paired.map { "${it.name ?: "Unknown"} • ${it.address}" }
         deviceSpinner.adapter = ArrayAdapter(
-            this,
-            android.R.layout.simple_spinner_dropdown_item,
-            labels
+            this, android.R.layout.simple_spinner_dropdown_item,
+            paired.map { "${it.name ?: "Unknown"} • ${it.address}" }
         )
     }
 
     private fun connectSelected() {
-        if (paired.isEmpty()) return
         val device = paired.getOrNull(deviceSpinner.selectedItemPosition) ?: return
         if (hid == null) {
             hid = ClassicHid.create(this) { connected, name ->
                 runOnUiThread {
-                    status.text = if (connected) {
-                        "● Connected: ${name ?: "Laptop"}"
-                    } else {
-                        "● Disconnected"
-                    }
-                    status.setTextColor(
-                        if (connected) 0xFF55FF88.toInt() else 0xFFFF5555.toInt()
-                    )
+                    status.text = if (connected) "● Connected: ${name ?: "Laptop"}" else "● Disconnected"
+                    status.setTextColor(if (connected) 0xFF55FF88.toInt() else 0xFFFF5555.toInt())
                 }
             }
             hid?.start()
@@ -166,33 +146,20 @@ class MainActivity : Activity() {
 
     private fun sendText(text: String) {
         text.forEach { c ->
-            if (!sendChar(c)) {
-                // Unsupported Unicode (emoji, CJK, etc.) is intentionally not
-                // converted into a wrong key. The native field can still show it.
-            }
+            sendChar(c)
         }
     }
 
     private fun sendChar(c: Char): Boolean {
         val mapping = HidKeyMapper.map(c) ?: return false
-        if (!hid?.send(mapping.modifier, mapping.usage).orFalse()) return false
+        return sendKey(mapping.usage, mapping.modifier)
+    }
+
+    private fun sendKey(usage: Int, modifier: Int = 0): Boolean {
+        if (hid?.send(modifier, usage) != true) return false
         hid?.send(0, 0)
         return true
     }
-
-    private fun sendBackspace(count: Int) {
-        repeat(count.coerceAtMost(32)) {
-            if (hid?.send(0, HidKeyMapper.BACKSPACE).orFalse()) {
-                hid?.send(0, 0)
-            }
-        }
-    }
-
-    private fun sendSpecialKey(usage: Int) {
-        if (hid?.send(0, usage).orFalse()) hid?.send(0, 0)
-    }
-
-    private fun Boolean?.orFalse() = this == true
 
     override fun onDestroy() {
         hid?.close()
@@ -202,49 +169,38 @@ class MainActivity : Activity() {
 
     private class RemoteEditText(
         context: Context,
-        private val onCommit: (String) -> Unit
+        private val emit: (String) -> Unit
     ) : EditText(context) {
-        override fun onCreateInputConnection(outAttrs: android.view.inputmethod.EditorInfo): InputConnection {
+        override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection {
             val base = super.onCreateInputConnection(outAttrs)
             return object : InputConnectionWrapper(base, false) {
                 override fun commitText(text: CharSequence?, newCursorPosition: Int): Boolean {
-                    text?.toString()?.takeIf { it.isNotEmpty() }?.let(onCommit)
+                    text?.toString()?.takeIf { it.isNotEmpty() }?.let(emit)
                     val result = super.commitText(text, newCursorPosition)
                     post { setText("") }
                     return result
                 }
 
                 override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
-                    if (beforeLength > 0) sendBackspaces(beforeLength)
+                    if (beforeLength > 0) repeat(beforeLength.coerceAtMost(32)) { emit("\b") }
                     return super.deleteSurroundingText(beforeLength, afterLength)
+                }
+
+                override fun deleteSurroundingTextInCodePoints(beforeLength: Int, afterLength: Int): Boolean {
+                    if (beforeLength > 0) repeat(beforeLength.coerceAtMost(32)) { emit("\b") }
+                    return super.deleteSurroundingTextInCodePoints(beforeLength, afterLength)
                 }
 
                 override fun sendKeyEvent(event: android.view.KeyEvent): Boolean {
                     if (event.action == android.view.KeyEvent.ACTION_DOWN) {
                         when (event.keyCode) {
-                            android.view.KeyEvent.KEYCODE_ENTER -> {
-                                sendSpecial(HidKeyMapper.ENTER)
-                                return true
-                            }
-                            android.view.KeyEvent.KEYCODE_TAB -> {
-                                sendSpecial(HidKeyMapper.TAB)
-                                return true
-                            }
+                            android.view.KeyEvent.KEYCODE_ENTER -> { emit("\u0000${HidKeyMapper.ENTER}"); return true }
+                            android.view.KeyEvent.KEYCODE_TAB -> { emit("\u0000${HidKeyMapper.TAB}"); return true }
                         }
                     }
                     return super.sendKeyEvent(event)
                 }
             }
-        }
-
-        private fun sendBackspaces(count: Int) {
-            repeat(count.coerceAtMost(32)) {
-                onCommit("\b")
-            }
-        }
-
-        private fun sendSpecial(usage: Int) {
-            onCommit("\u0000$usage")
         }
     }
 }
