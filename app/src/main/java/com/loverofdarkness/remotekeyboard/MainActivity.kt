@@ -66,6 +66,7 @@ class MainActivity : Activity() {
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
         }, LinearLayout.LayoutParams(-1, -2))
+
         status = TextView(this).apply {
             text = "● Disconnected"
             textSize = 16f
@@ -153,9 +154,7 @@ class MainActivity : Activity() {
         hid?.connect(device)
     }
 
-    private fun sendText(text: String) {
-        text.forEach(::sendChar)
-    }
+    private fun sendText(text: String) = text.forEach(::sendChar)
 
     private fun sendChar(c: Char): Boolean {
         val mapping = HidKeyMapper.map(c) ?: return false
@@ -174,19 +173,14 @@ class MainActivity : Activity() {
         super.onDestroy()
     }
 
+    /** Uses the currently selected Android IME; no keyboard is bundled or replaced. */
     private class RemoteEditText(context: Context, private val emit: (String) -> Unit) : EditText(context) {
         override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection {
             val base = super.onCreateInputConnection(outAttrs)
             return object : InputConnectionWrapper(base, false) {
                 override fun commitText(text: CharSequence?, newCursorPosition: Int): Boolean {
                     text?.toString()?.takeIf { it.isNotEmpty() }?.let(emit)
-                    // Do not clear the field: clearing it here was breaking Gboard's IME pipeline.
                     return super.commitText(text, newCursorPosition)
-                }
-
-                override fun setComposingText(text: CharSequence?, newCursorPosition: Int): Boolean {
-                    // Keep composition inside the native EditText. Forward only the final commitText.
-                    return super.setComposingText(text, newCursorPosition)
                 }
 
                 override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
@@ -202,8 +196,14 @@ class MainActivity : Activity() {
                 override fun sendKeyEvent(event: android.view.KeyEvent): Boolean {
                     if (event.action == android.view.KeyEvent.ACTION_DOWN) {
                         when (event.keyCode) {
-                            android.view.KeyEvent.KEYCODE_ENTER -> { emit("\u0000${HidKeyMapper.ENTER}"); return true }
-                            android.view.KeyEvent.KEYCODE_TAB -> { emit("\u0000${HidKeyMapper.TAB}"); return true }
+                            android.view.KeyEvent.KEYCODE_ENTER -> {
+                                emit("\u0000${HidKeyMapper.ENTER}")
+                                return true
+                            }
+                            android.view.KeyEvent.KEYCODE_TAB -> {
+                                emit("\u0000${HidKeyMapper.TAB}")
+                                return true
+                            }
                         }
                     }
                     return super.sendKeyEvent(event)
