@@ -1,16 +1,20 @@
 package android.bluetooth;
 
+import java.util.List;
 import java.util.concurrent.Executor;
 
 /** Compile-time stub for the Android system Bluetooth HID Device API. */
-public class BluetoothHidDevice implements BluetoothProfile {
-    public static final int HID_DEVICE = 19;
-    public static final byte SUBCLASS1_KEYBOARD = 0x40;
-    public static final byte REPORT_TYPE_INPUT = 1;
-    public static final byte REPORT_TYPE_OUTPUT = 2;
-    public static final byte REPORT_TYPE_FEATURE = 3;
+public abstract class BluetoothHidDevice implements BluetoothProfile {
+    public static final byte SUBCLASS1_NONE = (byte) 0x00;
+    public static final byte SUBCLASS1_KEYBOARD = (byte) 0x40;
+    public static final byte SUBCLASS1_MOUSE = (byte) 0x80;
+    public static final byte SUBCLASS1_COMBO = (byte) 0xC0;
 
-    public static class Callback {
+    public static final byte REPORT_TYPE_INPUT = (byte) 1;
+    public static final byte REPORT_TYPE_OUTPUT = (byte) 2;
+    public static final byte REPORT_TYPE_FEATURE = (byte) 3;
+
+    public abstract static class Callback {
         public void onAppStatusChanged(BluetoothDevice pluggedDevice, boolean registered) {}
         public void onConnectionStateChanged(BluetoothDevice device, int state) {}
         public void onGetReport(BluetoothDevice device, byte type, byte id, int bufferSize) {}
@@ -28,12 +32,16 @@ public class BluetoothHidDevice implements BluetoothProfile {
             Callback callback) { return false; }
 
     public boolean unregisterApp() { return false; }
+
+    /** AOSP signature: report ID is an int, not a byte. */
+    public boolean sendReport(BluetoothDevice device, int id, byte[] data) { return false; }
+
+    public boolean replyReport(BluetoothDevice device, byte type, byte id, byte[] data) { return false; }
+    public boolean reportError(BluetoothDevice device, byte error) { return false; }
     public boolean connect(BluetoothDevice device) { return false; }
     public boolean disconnect(BluetoothDevice device) { return false; }
-    public boolean sendReport(BluetoothDevice device, byte id, byte[] data) { return false; }
-    public boolean replyReport(BluetoothDevice device, byte type, byte id, byte[] data) { return false; }
 
-    @Override public java.util.List<BluetoothDevice> getConnectedDevices() { return java.util.Collections.emptyList(); }
-    @Override public int getConnectionState(BluetoothDevice device) { return BluetoothProfile.STATE_DISCONNECTED; }
-    @Override public java.util.List<BluetoothDevice> getDevicesMatchingConnectionStates(int[] states) { return java.util.Collections.emptyList(); }
+    @Override public List<BluetoothDevice> getDevicesMatchingConnectionStates(int[] states) { return null; }
+    @Override public List<BluetoothDevice> getConnectedDevices() { return null; }
+    @Override public int getConnectionState(BluetoothDevice device) { return 0; }
 }
