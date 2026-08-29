@@ -38,33 +38,17 @@ class MainActivity : Activity() {
 
     private fun requestBluetoothPermissions() {
         if (android.os.Build.VERSION.SDK_INT >= 31) {
-            val needed = arrayOf(
-                Manifest.permission.BLUETOOTH_CONNECT,
-                Manifest.permission.BLUETOOTH_SCAN
-            )
-            val missing = needed.filter {
-                ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
-            }
-            if (missing.isNotEmpty()) {
-                ActivityCompat.requestPermissions(this, missing.toTypedArray(), REQUEST_BLUETOOTH)
-            }
+            val needed = arrayOf(Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_SCAN)
+            val missing = needed.filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
+            if (missing.isNotEmpty()) ActivityCompat.requestPermissions(this, missing.toTypedArray(), REQUEST_BLUETOOTH)
         }
     }
 
-    override fun onRequestPermissionsResult(
-        requestCode: Int,
-        permissions: Array<out String>,
-        grantResults: IntArray
-    ) {
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode != REQUEST_BLUETOOTH) return
-
-        val granted = grantResults.isNotEmpty() && grantResults.all {
-            it == PackageManager.PERMISSION_GRANTED
-        }
-        if (granted) {
-            loadPairedDevices()
-        } else {
+        if (grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) loadPairedDevices()
+        else {
             status.text = "● Bluetooth permission required"
             status.setTextColor(0xFFFFAA33.toInt())
         }
@@ -76,15 +60,12 @@ class MainActivity : Activity() {
             setPadding(28, 28, 28, 28)
             setBackgroundColor(Color.BLACK)
         }
-
-        val title = TextView(this).apply {
+        root.addView(TextView(this).apply {
             text = "Remote Keyboard"
             textSize = 26f
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
-        }
-        root.addView(title, LinearLayout.LayoutParams(-1, -2))
-
+        }, LinearLayout.LayoutParams(-1, -2))
         status = TextView(this).apply {
             text = "● Disconnected"
             textSize = 16f
@@ -93,20 +74,16 @@ class MainActivity : Activity() {
             setPadding(0, 20, 0, 20)
         }
         root.addView(status, LinearLayout.LayoutParams(-1, -2))
-
         deviceSpinner = Spinner(this)
         root.addView(deviceSpinner, LinearLayout.LayoutParams(-1, -2))
-
         root.addView(Button(this).apply {
             text = "Refresh Paired Devices"
             setOnClickListener { loadPairedDevices() }
         }, LinearLayout.LayoutParams(-1, -2))
-
         root.addView(Button(this).apply {
             text = "Connect"
             setOnClickListener { connectSelected() }
         }, LinearLayout.LayoutParams(-1, -2))
-
         root.addView(Button(this).apply {
             text = "Disconnect"
             setOnClickListener { hid?.disconnect() }
@@ -124,9 +101,7 @@ class MainActivity : Activity() {
             textSize = 18f
             setTextColor(Color.WHITE)
             setHintTextColor(0xFF888888.toInt())
-            inputType = InputType.TYPE_CLASS_TEXT or
-                InputType.TYPE_TEXT_FLAG_MULTI_LINE or
-                InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
             imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI
             minLines = 5
             gravity = Gravity.TOP or Gravity.START
@@ -134,7 +109,6 @@ class MainActivity : Activity() {
             setBackgroundColor(0xFF181818.toInt())
         }
         root.addView(typeField, LinearLayout.LayoutParams(-1, 0, 1f).apply { topMargin = 24 })
-
         setContentView(root)
         loadPairedDevices()
     }
@@ -146,22 +120,15 @@ class MainActivity : Activity() {
             status.setTextColor(0xFFFFAA33.toInt())
             return
         }
-        if (android.os.Build.VERSION.SDK_INT >= 31 &&
-            ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED
-        ) return
-
+        if (android.os.Build.VERSION.SDK_INT >= 31 && ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) return
         try {
             paired = adapter.bondedDevices.toList().sortedBy { it.name ?: it.address }
-            deviceSpinner.adapter = ArrayAdapter(
-                this,
-                android.R.layout.simple_spinner_dropdown_item,
-                paired.map { "${it.name ?: "Unknown"} • ${it.address}" }
-            )
+            deviceSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, paired.map { "${it.name ?: "Unknown"} • ${it.address}" })
             if (paired.isEmpty()) {
                 status.text = "● No paired Bluetooth devices"
                 status.setTextColor(0xFFFFAA33.toInt())
             }
-        } catch (t: SecurityException) {
+        } catch (_: SecurityException) {
             status.text = "● Bluetooth permission required"
             status.setTextColor(0xFFFFAA33.toInt())
         }
@@ -174,7 +141,6 @@ class MainActivity : Activity() {
             status.setTextColor(0xFFFFAA33.toInt())
             return
         }
-
         if (hid == null) {
             hid = ClassicHid.create(this) { connected, name ->
                 runOnUiThread {
@@ -184,8 +150,6 @@ class MainActivity : Activity() {
             }
             hid?.start()
         }
-
-        // ClassicHid queues this if the HID profile is still starting.
         hid?.connect(device)
     }
 
@@ -210,18 +174,19 @@ class MainActivity : Activity() {
         super.onDestroy()
     }
 
-    private class RemoteEditText(
-        context: Context,
-        private val emit: (String) -> Unit
-    ) : EditText(context) {
+    private class RemoteEditText(context: Context, private val emit: (String) -> Unit) : EditText(context) {
         override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection {
             val base = super.onCreateInputConnection(outAttrs)
             return object : InputConnectionWrapper(base, false) {
                 override fun commitText(text: CharSequence?, newCursorPosition: Int): Boolean {
                     text?.toString()?.takeIf { it.isNotEmpty() }?.let(emit)
-                    val result = super.commitText(text, newCursorPosition)
-                    post { setText("") }
-                    return result
+                    // Do not clear the field: clearing it here was breaking Gboard's IME pipeline.
+                    return super.commitText(text, newCursorPosition)
+                }
+
+                override fun setComposingText(text: CharSequence?, newCursorPosition: Int): Boolean {
+                    // Keep composition inside the native EditText. Forward only the final commitText.
+                    return super.setComposingText(text, newCursorPosition)
                 }
 
                 override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
@@ -237,14 +202,8 @@ class MainActivity : Activity() {
                 override fun sendKeyEvent(event: android.view.KeyEvent): Boolean {
                     if (event.action == android.view.KeyEvent.ACTION_DOWN) {
                         when (event.keyCode) {
-                            android.view.KeyEvent.KEYCODE_ENTER -> {
-                                emit("\u0000${HidKeyMapper.ENTER}")
-                                return true
-                            }
-                            android.view.KeyEvent.KEYCODE_TAB -> {
-                                emit("\u0000${HidKeyMapper.TAB}")
-                                return true
-                            }
+                            android.view.KeyEvent.KEYCODE_ENTER -> { emit("\u0000${HidKeyMapper.ENTER}"); return true }
+                            android.view.KeyEvent.KEYCODE_TAB -> { emit("\u0000${HidKeyMapper.TAB}"); return true }
                         }
                     }
                     return super.sendKeyEvent(event)
@@ -253,7 +212,5 @@ class MainActivity : Activity() {
         }
     }
 
-    companion object {
-        private const val REQUEST_BLUETOOTH = 77
-    }
+    companion object { private const val REQUEST_BLUETOOTH = 77 }
 }
