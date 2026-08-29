@@ -26,6 +26,19 @@ jobs:
           unzip -q gradle.zip
           echo "$PWD/gradle-8.7/bin" >> "$GITHUB_PATH"
 
+      - name: Build Bluetooth HID compile stub
+        run: |
+          set -euo pipefail
+          mkdir -p app/stubs
+          mkdir -p /tmp/hid-stubs-classes
+          javac \
+            -cp "$ANDROID_HOME/platforms/android-35/android.jar" \
+            -d /tmp/hid-stubs-classes \
+            app/stubs-src/android/bluetooth/BluetoothHidDevice.java \
+            app/stubs-src/android/bluetooth/BluetoothHidDeviceAppSdpSettings.java \
+            app/stubs-src/android/bluetooth/BluetoothHidDeviceAppQosSettings.java
+          jar cf app/stubs/hidden-android.jar -C /tmp/hid-stubs-classes .
+
       - name: Build debug APK
         run: gradle --no-daemon assembleDebug
 
