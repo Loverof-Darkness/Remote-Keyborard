@@ -1,8 +1,13 @@
 package com.loverofdarkness.remotekeyboard
 
+/** HID report descriptor and boot-keyboard payloads. */
 object HidReports {
     const val REPORT_ID_KEYBOARD = 1
-    const val KEYBOARD_REPORT_SIZE = 9
+
+    // IMPORTANT: sendReport() receives the Report ID separately, so the
+    // payload must be 8 bytes, NOT 9. The descriptor is:
+    // modifier(1) + reserved(1) + 6 key usages(6) = 8 bytes.
+    const val KEYBOARD_REPORT_SIZE = 8
 
     val KEYBOARD_DESCRIPTOR = byteArrayOf(
         0x05, 0x01, 0x09, 0x06, 0xA1.toByte(), 0x01,
@@ -26,9 +31,12 @@ object ReportBuilder {
     const val MOD_LEFT_ALT = 0x04
     const val MOD_LEFT_GUI = 0x08
 
+    /** 8-byte boot keyboard input payload; Report ID is sent separately. */
     fun keyboard(modifiers: Int, usage: Int): ByteArray = byteArrayOf(
-        modifiers.toByte(), 0,
-        usage.toByte(), 0, 0, 0, 0, 0, 0
+        (modifiers and 0xFF).toByte(),
+        0,
+        (usage and 0xFF).toByte(),
+        0, 0, 0, 0, 0
     )
 
     fun keyboardEmpty(): ByteArray = keyboard(0, 0)
