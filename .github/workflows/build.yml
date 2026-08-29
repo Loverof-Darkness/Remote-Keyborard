@@ -6,7 +6,6 @@ on:
   workflow_dispatch:
 
 # Do not cancel a build just because another commit was pushed.
-# This makes every main-branch build complete and exposes real failures.
 concurrency:
   group: build-apk-${{ github.ref }}
   cancel-in-progress: false
@@ -19,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Java 17
         uses: actions/setup-java@v5
@@ -29,7 +28,7 @@ jobs:
           cache: gradle
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
         with:
           packages: platform-tools
 
@@ -37,7 +36,7 @@ jobs:
         run: sdkmanager --install "platforms;android-35" "build-tools;35.0.0"
 
       - name: Set up Gradle 8.7
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: '8.7'
 
@@ -102,7 +101,7 @@ jobs:
           sha256sum "$SIGNED_APK"
 
       - name: Upload installable APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: remote-keyboard-installable
           path: app/build/outputs/apk/release/remote-keyboard.apk
