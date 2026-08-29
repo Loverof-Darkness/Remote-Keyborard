@@ -30,7 +30,6 @@ class ClassicHid private constructor(
     @Volatile private var senderClosed = false
     @Volatile private var hid: BluetoothHidDevice? = null
     @Volatile private var host: BluetoothDevice? = null
-    @Volatile private var protocolMode: Byte = BluetoothHidDevice.PROTOCOL_REPORT_MODE
 
     private var pendingHost: BluetoothDevice? = null
     private var lastHost: BluetoothDevice? = null
@@ -49,9 +48,7 @@ class ClassicHid private constructor(
             connecting = true
             try {
                 Log.i(TAG, "HID connect attempt to ${safeName(target)}")
-                if (!service.connect(target)) {
-                    connecting = false
-                }
+                if (!service.connect(target)) connecting = false
             } catch (t: Throwable) {
                 connecting = false
                 Log.w(TAG, "HID connect failed", t)
@@ -68,13 +65,14 @@ class ClassicHid private constructor(
             if (!appRegistered) return
             val report = reportQueue.poll() ?: return
             try {
-                // HID boot protocol has a fixed 8-byte keyboard report and no
-                // Report ID. Report protocol uses the descriptor's ID 1.
-                val reportId = currentReportId()
-                val accepted = service.sendReport(device, reportId, report)
-                if (!accepted) Log.w(TAG, "sendReport rejected id=$reportId mode=$protocolMode")
+                // Keep the same Report ID in every mode. The known-working
+                // BluetoothRemoteHid implementation does not switch the ID
+                // after SET_PROTOCOL; changing it can make Linux tear down the
+                // HID interrupt channel on the first keyboard report.
+                val accepted = service.sendReport(device, HidReports.REPORT_ID_KEYBOARD, report)
+                if (!accepted) Log.w(TAG, "sendReport rejected")
             } catch (t: Throwable) {
-                Log.w(TAG, "sendReport failed id=${currentReportId()} mode=$protocolMode", t)
+                Log.w(TAG, "sendReport failed", t)
             }
             if (reportQueue.isNotEmpty() && host == device && appRegistered && !senderClosed) {
                 drainScheduled = true
@@ -89,7 +87,6 @@ class ClassicHid private constructor(
             profileOpening = false
             hid = proxy
             appRegistered = false
-            protocolMode = BluetoothHidDevice.PROTOCOL_REPORT_MODE
             register()
         }
 
@@ -187,8 +184,6 @@ class ClassicHid private constructor(
                 connecting = false
                 clearQueuedReports()
                 onStateChanged(false, null)
-                // Deliberately do not auto-reconnect. A host rejecting the HID
-                // protocol must not be hammered by a reconnect loop.
             }
             BluetoothProfile.STATE_DISCONNECTING -> Unit
         }
@@ -196,7 +191,7 @@ class ClassicHid private constructor(
 
     override fun onGetReport(device: BluetoothDevice, type: Byte, id: Byte, bufferSize: Int) {
         val requestedId = id.toInt() and 0xFF
-        val payload = if (requestedId == 0xFE && protocolMode != BluetoothHidDevice.PROTOCOL_BOOT_MODE) {
+        val payload = if (requestedId == 0xFE) {
             HidReports.HID_INFORMATION
         } else {
             ReportBuilder.keyboardEmpty()
@@ -204,15 +199,13 @@ class ClassicHid private constructor(
         try {
             hid?.replyReport(device, type, id, payload)
         } catch (t: Throwable) {
-            Log.w(TAG, "replyReport failed id=$requestedId mode=$protocolMode", t)
+            Log.w(TAG, "replyReport failed id=$requestedId", t)
         }
     }
 
-    override fun onSetProtocol(device: BluetoothDevice, protocol: Byte) {
-        protocolMode = protocol
-        Log.i(TAG, "HID protocol mode=${protocol.toInt() and 0xFF}")
-    }
-
+    // Intentionally do not override onSetProtocol. The reference HID
+    // implementation keeps sending its declared keyboard Report ID after the
+    // host requests boot/report protocol switching.
     override fun onSetReport(device: BluetoothDevice, type: Byte, id: Byte, data: ByteArray) = Unit
     override fun onInterruptData(device: BluetoothDevice, reportId: Byte, data: ByteArray) = Unit
 
@@ -273,9 +266,6 @@ class ClassicHid private constructor(
         if (accepted) scheduleDrain()
         return accepted
     }
-
-    private fun currentReportId(): Int =
-        if (protocolMode == BluetoothHidDevice.PROTOCOL_BOOT_MODE) 0 else HidReports.REPORT_ID_KEYBOARD
 
     private fun scheduleDrain() {
         if (senderClosed || drainScheduled) return
