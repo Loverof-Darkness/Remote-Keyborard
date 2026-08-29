@@ -15,6 +15,7 @@ import android.util.Log
 import java.util.concurrent.Executor
 import java.util.concurrent.LinkedBlockingQueue
 
+/** Minimal Bluetooth Classic HID keyboard bridge. */
 class ClassicHid private constructor(
     context: Context,
     private val onStateChanged: (Boolean, String?) -> Unit
@@ -24,11 +25,12 @@ class ClassicHid private constructor(
     private val handler = Handler(Looper.getMainLooper())
     private val senderThread = HandlerThread("RemoteKeyboard-HidSender").apply { start() }
     private val senderHandler = Handler(senderThread.looper)
-    private val reportQueue = LinkedBlockingQueue<ByteArray>(MAX_QUEUED_REPORTS)
+    private val reportQueue = LinkedBlockingQueue<ByteArray>(256)
 
     @Volatile private var senderClosed = false
     @Volatile private var hid: BluetoothHidDevice? = null
     @Volatile private var host: BluetoothDevice? = null
+    @Volatile private var protocolMode: Byte = BluetoothHidDevice.PROTOCOL_REPORT_MODE
 
     private var pendingHost: BluetoothDevice? = null
     private var lastHost: BluetoothDevice? = null
@@ -42,28 +44,17 @@ class ClassicHid private constructor(
         override fun run() {
             if (senderClosed || manualDisconnect || host != null) return
             val target = pendingHost ?: lastHost ?: return
-            if (adapter == null || !adapter.isEnabled) {
-                scheduleReconnect()
-                return
-            }
             val service = hid
-            if (service == null || !appRegistered) {
-                if (service == null) startProfile()
-                scheduleReconnect()
-                return
-            }
-            if (connecting) return
+            if (adapter == null || !adapter.isEnabled || service == null || !appRegistered || connecting) return
             connecting = true
             try {
                 Log.i(TAG, "HID connect attempt to ${safeName(target)}")
                 if (!service.connect(target)) {
                     connecting = false
-                    scheduleReconnect()
                 }
             } catch (t: Throwable) {
                 connecting = false
                 Log.w(TAG, "HID connect failed", t)
-                scheduleReconnect()
             }
         }
     }
@@ -72,21 +63,19 @@ class ClassicHid private constructor(
         override fun run() {
             drainScheduled = false
             if (senderClosed) return
-            val service = hid
-            val device = host
-            if (service == null || device == null || !appRegistered) {
-                reportQueue.clear()
-                return
-            }
+            val service = hid ?: return
+            val device = host ?: return
+            if (!appRegistered) return
             val report = reportQueue.poll() ?: return
             try {
-                val accepted = service.sendReport(device, HidReports.REPORT_ID_KEYBOARD, report)
-                if (!accepted) Log.w(TAG, "sendReport rejected")
+                // HID boot protocol has a fixed 8-byte keyboard report and no
+                // Report ID. Report protocol uses the descriptor's ID 1.
+                val reportId = currentReportId()
+                val accepted = service.sendReport(device, reportId, report)
+                if (!accepted) Log.w(TAG, "sendReport rejected id=$reportId mode=$protocolMode")
             } catch (t: Throwable) {
-                Log.w(TAG, "sendReport failed", t)
+                Log.w(TAG, "sendReport failed id=${currentReportId()} mode=$protocolMode", t)
             }
-            // Never burst press/release packets. Give the Bluetooth HID
-            // interrupt channel a small gap between reports.
             if (reportQueue.isNotEmpty() && host == device && appRegistered && !senderClosed) {
                 drainScheduled = true
                 senderHandler.postDelayed(this, REPORT_GAP_MS)
@@ -100,6 +89,7 @@ class ClassicHid private constructor(
             profileOpening = false
             hid = proxy
             appRegistered = false
+            protocolMode = BluetoothHidDevice.PROTOCOL_REPORT_MODE
             register()
         }
 
@@ -112,10 +102,6 @@ class ClassicHid private constructor(
             connecting = false
             clearQueuedReports()
             onStateChanged(false, null)
-            if (!manualDisconnect && lastHost != null) {
-                pendingHost = lastHost
-                scheduleReconnect(immediate = true)
-            }
         }
     }
 
@@ -126,18 +112,12 @@ class ClassicHid private constructor(
             return
         }
         if (hid != null || profileOpening) return
-        startProfile()
-    }
-
-    private fun startProfile() {
-        if (adapter == null || !adapter.isEnabled || profileOpening || senderClosed) return
         profileOpening = true
         try {
             adapter.getProfileProxy(appContext, profileListener, BluetoothProfile.HID_DEVICE)
         } catch (t: Throwable) {
             profileOpening = false
             Log.e(TAG, "Unable to open HID profile", t)
-            scheduleReconnect()
             onStateChanged(false, null)
         }
     }
@@ -146,13 +126,11 @@ class ClassicHid private constructor(
         val service = hid ?: return
         val sdp = BluetoothHidDeviceAppSdpSettings(
             "Remote Keyboard",
-            "Native text-field Bluetooth keyboard",
+            "Native Android keyboard bridge",
             "Loverof-Darkness",
             BluetoothHidDevice.SUBCLASS1_KEYBOARD,
             HidReports.KEYBOARD_DESCRIPTOR
         )
-        // Match the known-working reference: do not use tiny/custom QoS
-        // buckets that can make some HID hosts reject the interrupt channel.
         val max = BluetoothHidDeviceAppQosSettings.MAX
         val qos = BluetoothHidDeviceAppQosSettings(
             BluetoothHidDeviceAppQosSettings.SERVICE_BEST_EFFORT,
@@ -163,7 +141,6 @@ class ClassicHid private constructor(
         } catch (t: Throwable) {
             appRegistered = false
             Log.e(TAG, "registerApp failed", t)
-            if (!manualDisconnect) scheduleReconnect()
             onStateChanged(false, null)
         }
     }
@@ -175,20 +152,13 @@ class ClassicHid private constructor(
             connecting = false
             clearQueuedReports()
             onStateChanged(false, null)
-            if (!manualDisconnect && lastHost != null) {
-                pendingHost = lastHost
-                scheduleReconnect(immediate = true)
-            }
             return
         }
-        // pluggedDevice is the established HID virtual-cable host, not merely
-        // the registration event. Treat it as connected only when supplied.
         if (pluggedDevice != null) {
             host = pluggedDevice
             lastHost = pluggedDevice
             pendingHost = null
             connecting = false
-            handler.removeCallbacks(retryConnect)
             onStateChanged(true, safeName(pluggedDevice))
             scheduleDrain()
         } else if (pendingHost != null && !manualDisconnect) {
@@ -203,7 +173,6 @@ class ClassicHid private constructor(
                 lastHost = device
                 pendingHost = null
                 connecting = false
-                handler.removeCallbacks(retryConnect)
                 onStateChanged(true, safeName(device))
                 scheduleDrain()
             }
@@ -215,21 +184,19 @@ class ClassicHid private constructor(
             }
             BluetoothProfile.STATE_DISCONNECTED -> {
                 if (host == device) host = null
-                if (!manualDisconnect && lastHost == device) pendingHost = device
                 connecting = false
                 clearQueuedReports()
                 onStateChanged(false, null)
-                if (!manualDisconnect && lastHost == device) scheduleReconnect(immediate = true)
+                // Deliberately do not auto-reconnect. A host rejecting the HID
+                // protocol must not be hammered by a reconnect loop.
             }
             BluetoothProfile.STATE_DISCONNECTING -> Unit
         }
     }
 
     override fun onGetReport(device: BluetoothDevice, type: Byte, id: Byte, bufferSize: Int) {
-        // Android HID hosts may request the HID Information feature report
-        // (0xFE) while establishing/refreshing the virtual cable. Failing to
-        // answer GET_REPORT can make the host tear the HID link down.
-        val payload = if ((id.toInt() and 0xFF) == 0xFE) {
+        val requestedId = id.toInt() and 0xFF
+        val payload = if (requestedId == 0xFE && protocolMode != BluetoothHidDevice.PROTOCOL_BOOT_MODE) {
             HidReports.HID_INFORMATION
         } else {
             ReportBuilder.keyboardEmpty()
@@ -237,12 +204,16 @@ class ClassicHid private constructor(
         try {
             hid?.replyReport(device, type, id, payload)
         } catch (t: Throwable) {
-            Log.w(TAG, "replyReport failed", t)
+            Log.w(TAG, "replyReport failed id=$requestedId mode=$protocolMode", t)
         }
     }
 
+    override fun onSetProtocol(device: BluetoothDevice, protocol: Byte) {
+        protocolMode = protocol
+        Log.i(TAG, "HID protocol mode=${protocol.toInt() and 0xFF}")
+    }
+
     override fun onSetReport(device: BluetoothDevice, type: Byte, id: Byte, data: ByteArray) = Unit
-    override fun onSetProtocol(device: BluetoothDevice, protocol: Byte) = Unit
     override fun onInterruptData(device: BluetoothDevice, reportId: Byte, data: ByteArray) = Unit
 
     override fun onVirtualCableUnplug(device: BluetoothDevice) {
@@ -251,7 +222,6 @@ class ClassicHid private constructor(
         if (lastHost == device) lastHost = null
         connecting = false
         clearQueuedReports()
-        handler.removeCallbacks(retryConnect)
         onStateChanged(false, null)
     }
 
@@ -301,20 +271,16 @@ class ClassicHid private constructor(
         if (!isConnected() || senderClosed) return false
         val accepted = reportQueue.offer(ReportBuilder.keyboard(modifiers, usage))
         if (accepted) scheduleDrain()
-        else Log.w(TAG, "HID report queue full")
         return accepted
     }
+
+    private fun currentReportId(): Int =
+        if (protocolMode == BluetoothHidDevice.PROTOCOL_BOOT_MODE) 0 else HidReports.REPORT_ID_KEYBOARD
 
     private fun scheduleDrain() {
         if (senderClosed || drainScheduled) return
         drainScheduled = true
         senderHandler.post(drainReports)
-    }
-
-    private fun scheduleReconnect(immediate: Boolean = false) {
-        if (senderClosed || manualDisconnect || pendingHost == null) return
-        handler.removeCallbacks(retryConnect)
-        handler.postDelayed(retryConnect, if (immediate) 300L else RECONNECT_DELAY_MS)
     }
 
     private fun clearQueuedReports() {
@@ -347,9 +313,7 @@ class ClassicHid private constructor(
 
     companion object {
         private const val TAG = "RemoteKeyboardHid"
-        private const val RECONNECT_DELAY_MS = 1500L
         private const val REPORT_GAP_MS = 12L
-        private const val MAX_QUEUED_REPORTS = 1024
 
         fun create(context: Context, onStateChanged: (Boolean, String?) -> Unit) =
             ClassicHid(context.applicationContext, onStateChanged)
