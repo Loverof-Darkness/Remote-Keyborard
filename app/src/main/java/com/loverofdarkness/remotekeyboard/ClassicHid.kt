@@ -8,6 +8,8 @@ import android.bluetooth.BluetoothHidDeviceAppSdpSettings
 import android.bluetooth.BluetoothProfile
 import android.content.Context
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import java.util.concurrent.Executor
 
@@ -17,21 +19,56 @@ class ClassicHid private constructor(
 ) : BluetoothHidDevice.Callback() {
     private val appContext = context.applicationContext
     private val adapter = BluetoothAdapter.getDefaultAdapter()
+    private val handler = Handler(Looper.getMainLooper())
     private var hid: BluetoothHidDevice? = null
     private var host: BluetoothDevice? = null
     private var pendingHost: BluetoothDevice? = null
+    private var reconnectAttempts = 0
+    private var profileOpening = false
+
+    private val retryConnect = object : Runnable {
+        override fun run() {
+            val target = pendingHost ?: return
+            if (host != null) return
+            if (hid == null) {
+                startProfile()
+                return
+            }
+            if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+                Log.w(TAG, "Giving up HID reconnect after $MAX_RECONNECT_ATTEMPTS attempts")
+                pendingHost = null
+                reconnectAttempts = 0
+                onStateChanged(false, null)
+                return
+            }
+            reconnectAttempts++
+            try {
+                Log.i(TAG, "HID reconnect attempt $reconnectAttempts")
+                if (!hid!!.connect(target)) {
+                    handler.postDelayed(this, RECONNECT_DELAY_MS)
+                }
+            } catch (t: Throwable) {
+                Log.w(TAG, "HID reconnect failed", t)
+                handler.postDelayed(this, RECONNECT_DELAY_MS)
+            }
+        }
+    }
 
     private val profileListener = object : BluetoothProfile.ServiceListener {
         override fun onServiceConnected(profile: Int, proxy: BluetoothProfile) {
             if (profile != BluetoothProfile.HID_DEVICE || proxy !is BluetoothHidDevice) return
+            profileOpening = false
             hid = proxy
             register()
         }
+
         override fun onServiceDisconnected(profile: Int) {
             if (profile == BluetoothProfile.HID_DEVICE) {
+                profileOpening = false
                 hid = null
                 host = null
                 onStateChanged(false, null)
+                if (pendingHost != null) handler.postDelayed(retryConnect, RECONNECT_DELAY_MS)
             }
         }
     }
@@ -41,10 +78,19 @@ class ClassicHid private constructor(
             onStateChanged(false, null)
             return
         }
+        if (hid != null || profileOpening) return
+        startProfile()
+    }
+
+    private fun startProfile() {
+        if (adapter == null || !adapter.isEnabled || profileOpening) return
+        profileOpening = true
         try {
             adapter.getProfileProxy(appContext, profileListener, BluetoothProfile.HID_DEVICE)
         } catch (t: Throwable) {
+            profileOpening = false
             Log.e(TAG, "Unable to open HID profile", t)
+            handler.postDelayed(retryConnect, RECONNECT_DELAY_MS)
             onStateChanged(false, null)
         }
     }
@@ -74,26 +120,46 @@ class ClassicHid private constructor(
         if (!registered) {
             host = null
             onStateChanged(false, null)
+            if (pendingHost != null) handler.postDelayed(retryConnect, RECONNECT_DELAY_MS)
             return
-        }
-        pendingHost?.let {
-            pendingHost = null
-            connect(it)
         }
         pluggedDevice?.let {
             host = it
+            pendingHost = null
+            reconnectAttempts = 0
+            handler.removeCallbacks(retryConnect)
             onStateChanged(true, safeName(it))
+            return
+        }
+        pendingHost?.let {
+            handler.removeCallbacks(retryConnect)
+            handler.post(retryConnect)
         }
     }
 
     override fun onConnectionStateChanged(device: BluetoothDevice, state: Int) {
-        if (state == BluetoothProfile.STATE_CONNECTED) {
-            host = device
-            pendingHost = null
-            onStateChanged(true, safeName(device))
-        } else if (host == device) {
-            host = null
-            onStateChanged(false, null)
+        when (state) {
+            BluetoothProfile.STATE_CONNECTED -> {
+                host = device
+                pendingHost = null
+                reconnectAttempts = 0
+                handler.removeCallbacks(retryConnect)
+                onStateChanged(true, safeName(device))
+            }
+            BluetoothProfile.STATE_DISCONNECTED -> {
+                if (host == device) host = null
+                onStateChanged(false, null)
+                if (pendingHost == device) {
+                    reconnectAttempts = 0
+                    handler.postDelayed(retryConnect, RECONNECT_DELAY_MS)
+                }
+            }
+            BluetoothProfile.STATE_CONNECTING,
+            BluetoothProfile.STATE_DISCONNECTING -> {
+                // Keep the real connection state pending; don't report a false
+                // connected/disconnected transition while Android is changing it.
+            }
+            else -> Unit
         }
     }
 
@@ -115,37 +181,59 @@ class ClassicHid private constructor(
     }
 
     fun connect(device: BluetoothDevice) {
+        if (host == device) return
+        pendingHost = device
+        reconnectAttempts = 0
+        handler.removeCallbacks(retryConnect)
+
+        if (hid == null) {
+            start()
+            handler.postDelayed(retryConnect, PROFILE_WAIT_MS)
+            return
+        }
+        tryConnectNow()
+    }
+
+    private fun tryConnectNow() {
+        val target = pendingHost ?: return
         val service = hid
         if (service == null) {
-            pendingHost = device
+            handler.postDelayed(retryConnect, PROFILE_WAIT_MS)
             return
         }
         try {
-            if (!service.connect(device)) {
-                pendingHost = device
-                Log.w(TAG, "HID connect request was rejected")
+            if (!service.connect(target)) {
+                handler.postDelayed(retryConnect, RECONNECT_DELAY_MS)
             }
         } catch (t: Throwable) {
-            pendingHost = device
             Log.e(TAG, "HID connect failed", t)
+            handler.postDelayed(retryConnect, RECONNECT_DELAY_MS)
         }
     }
 
     fun disconnect() {
+        handler.removeCallbacks(retryConnect)
         pendingHost = null
-        val current = host ?: return
-        try { hid?.disconnect(current) } catch (t: Throwable) { Log.w(TAG, "disconnect failed", t) }
-        host = null
-        onStateChanged(false, null)
+        reconnectAttempts = 0
+        val current = host
+        if (current == null) {
+            onStateChanged(false, null)
+            return
+        }
+        try {
+            // Do not clear host until onConnectionStateChanged confirms the
+            // asynchronous disconnect. This prevents an immediate reconnect
+            // racing the old HID connection.
+            hid?.disconnect(current)
+        } catch (t: Throwable) {
+            Log.w(TAG, "disconnect failed", t)
+            host = null
+            onStateChanged(false, null)
+        }
     }
 
     fun isConnected(): Boolean = host != null
 
-    /**
-     * AOSP BluetoothHidDevice.sendReport() takes an INT report ID.
-     * The previous compile stub incorrectly declared BYTE, which compiled
-     * but caused a runtime method-signature mismatch on real Android.
-     */
     fun send(modifiers: Int, usage: Int): Boolean {
         val service = hid ?: return false
         val device = host ?: return false
@@ -164,8 +252,10 @@ class ClassicHid private constructor(
     }
 
     fun close() {
+        handler.removeCallbacksAndMessages(null)
         pendingHost = null
         host = null
+        profileOpening = false
         try { hid?.unregisterApp() } catch (t: Throwable) { Log.w(TAG, "unregisterApp failed", t) }
         try { adapter?.closeProfileProxy(BluetoothProfile.HID_DEVICE, hid) } catch (_: Throwable) {}
         hid = null
@@ -177,6 +267,10 @@ class ClassicHid private constructor(
 
     companion object {
         private const val TAG = "RemoteKeyboardHid"
+        private const val PROFILE_WAIT_MS = 500L
+        private const val RECONNECT_DELAY_MS = 800L
+        private const val MAX_RECONNECT_ATTEMPTS = 6
+
         fun create(context: Context, onStateChanged: (Boolean, String?) -> Unit) =
             ClassicHid(context.applicationContext, onStateChanged)
     }
