@@ -9,9 +9,11 @@ import android.bluetooth.BluetoothProfile
 import android.content.Context
 import android.os.Build
 import android.os.Handler
+import android.os.HandlerThread
 import android.os.Looper
 import android.util.Log
 import java.util.concurrent.Executor
+import java.util.concurrent.LinkedBlockingQueue
 
 class ClassicHid private constructor(
     context: Context,
@@ -20,12 +22,39 @@ class ClassicHid private constructor(
     private val appContext = context.applicationContext
     private val adapter = BluetoothAdapter.getDefaultAdapter()
     private val handler = Handler(Looper.getMainLooper())
-    private var hid: BluetoothHidDevice? = null
-    private var host: BluetoothDevice? = null
+    private val senderThread = HandlerThread("RemoteKeyboard-HidSender").apply { start() }
+    private val senderHandler = Handler(senderThread.looper)
+    private val reportQueue = LinkedBlockingQueue<ByteArray>(MAX_QUEUED_REPORTS)
+    @Volatile private var senderClosed = false
+    @Volatile private var hid: BluetoothHidDevice? = null
+    @Volatile private var host: BluetoothDevice? = null
     private var pendingHost: BluetoothDevice? = null
     private var lastHost: BluetoothDevice? = null
     private var reconnectAttempts = 0
     private var profileOpening = false
+
+    private val drainReports = object : Runnable {
+        override fun run() {
+            if (senderClosed) return
+            val service = hid
+            val device = host
+            if (service == null || device == null) {
+                reportQueue.clear()
+                return
+            }
+            while (!senderClosed) {
+                val report = reportQueue.poll() ?: break
+                try {
+                    if (!service.sendReport(device, HidReports.REPORT_ID_KEYBOARD, report)) {
+                        Log.w(TAG, "sendReport rejected; dropping queued report")
+                    }
+                } catch (t: Throwable) {
+                    Log.w(TAG, "sendReport failed; dropping queued report", t)
+                    break
+                }
+            }
+        }
+    }
 
     private val retryConnect = object : Runnable {
         override fun run() {
@@ -67,6 +96,7 @@ class ClassicHid private constructor(
                 profileOpening = false
                 hid = null
                 host = null
+                clearQueuedReports()
                 onStateChanged(false, null)
                 lastHost?.let {
                     pendingHost = it
@@ -75,6 +105,10 @@ class ClassicHid private constructor(
                 }
             }
         }
+    }
+
+    init {
+        senderHandler.post(drainReports)
     }
 
     fun start() {
@@ -123,6 +157,7 @@ class ClassicHid private constructor(
     override fun onAppStatusChanged(pluggedDevice: BluetoothDevice?, registered: Boolean) {
         if (!registered) {
             host = null
+            clearQueuedReports()
             onStateChanged(false, null)
             lastHost?.let {
                 pendingHost = it
@@ -136,6 +171,7 @@ class ClassicHid private constructor(
             lastHost = it
             pendingHost = null
             reconnectAttempts = 0
+            clearQueuedReports()
             handler.removeCallbacks(retryConnect)
             onStateChanged(true, safeName(it))
             return
@@ -153,11 +189,13 @@ class ClassicHid private constructor(
                 lastHost = device
                 pendingHost = null
                 reconnectAttempts = 0
+                clearQueuedReports()
                 handler.removeCallbacks(retryConnect)
                 onStateChanged(true, safeName(device))
             }
             BluetoothProfile.STATE_DISCONNECTED -> {
                 if (host == device) host = null
+                clearQueuedReports()
                 onStateChanged(false, null)
                 if (lastHost == device) {
                     pendingHost = device
@@ -187,6 +225,7 @@ class ClassicHid private constructor(
         if (host == device) host = null
         if (pendingHost == device) pendingHost = null
         if (lastHost == device) lastHost = null
+        clearQueuedReports()
         handler.removeCallbacks(retryConnect)
         onStateChanged(false, null)
     }
@@ -196,6 +235,7 @@ class ClassicHid private constructor(
         lastHost = device
         pendingHost = device
         reconnectAttempts = 0
+        clearQueuedReports()
         handler.removeCallbacks(retryConnect)
 
         if (hid == null) {
@@ -226,6 +266,7 @@ class ClassicHid private constructor(
         pendingHost = null
         lastHost = null
         reconnectAttempts = 0
+        clearQueuedReports()
         val current = host
         if (current == null) {
             onStateChanged(false, null)
@@ -242,25 +283,28 @@ class ClassicHid private constructor(
 
     fun isConnected(): Boolean = host != null
 
+    /**
+     * Queue a keyboard report for immediate background transmission. The
+     * Bluetooth HID API sends each report over its interrupt channel, so the
+     * queue preserves the required press/release ordering while keeping
+     * binder/Bluetooth work off the UI and IME threads.
+     */
     fun send(modifiers: Int, usage: Int): Boolean {
-        val service = hid ?: return false
-        val device = host ?: return false
-        return try {
-            val accepted = service.sendReport(
-                device,
-                HidReports.REPORT_ID_KEYBOARD,
-                ReportBuilder.keyboard(modifiers, usage)
-            )
-            if (!accepted) Log.w(TAG, "sendReport rejected by HID service")
-            accepted
-        } catch (t: Throwable) {
-            Log.e(TAG, "sendReport failed", t)
-            false
-        }
+        if (hid == null || host == null || senderClosed) return false
+        val report = ReportBuilder.keyboard(modifiers, usage)
+        val accepted = reportQueue.offer(report)
+        if (accepted) senderHandler.post(drainReports)
+        else Log.w(TAG, "HID report queue full; dropping input")
+        return accepted
+    }
+
+    private fun clearQueuedReports() {
+        reportQueue.clear()
     }
 
     fun close() {
         handler.removeCallbacksAndMessages(null)
+        clearQueuedReports()
         pendingHost = null
         lastHost = null
         host = null
@@ -268,6 +312,9 @@ class ClassicHid private constructor(
         try { hid?.unregisterApp() } catch (t: Throwable) { Log.w(TAG, "unregisterApp failed", t) }
         try { adapter?.closeProfileProxy(BluetoothProfile.HID_DEVICE, hid) } catch (_: Throwable) {}
         hid = null
+        senderClosed = true
+        senderHandler.removeCallbacksAndMessages(null)
+        senderThread.quitSafely()
     }
 
     private fun safeName(device: BluetoothDevice): String = try {
@@ -279,6 +326,7 @@ class ClassicHid private constructor(
         private const val PROFILE_WAIT_MS = 500L
         private const val RECONNECT_DELAY_MS = 800L
         private const val MAX_RECONNECT_ATTEMPTS = 6
+        private const val MAX_QUEUED_REPORTS = 8192
 
         fun create(context: Context, onStateChanged: (Boolean, String?) -> Unit) =
             ClassicHid(context.applicationContext, onStateChanged)
