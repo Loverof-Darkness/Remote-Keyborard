@@ -45,7 +45,28 @@ class MainActivity : Activity() {
             val missing = needed.filter {
                 ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
             }
-            if (missing.isNotEmpty()) ActivityCompat.requestPermissions(this, missing.toTypedArray(), 77)
+            if (missing.isNotEmpty()) {
+                ActivityCompat.requestPermissions(this, missing.toTypedArray(), REQUEST_BLUETOOTH)
+            }
+        }
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != REQUEST_BLUETOOTH) return
+
+        val granted = grantResults.isNotEmpty() && grantResults.all {
+            it == PackageManager.PERMISSION_GRANTED
+        }
+        if (granted) {
+            loadPairedDevices()
+        } else {
+            status.text = "● Bluetooth permission required"
+            status.setTextColor(0xFFFFAA33.toInt())
         }
     }
 
@@ -119,19 +140,41 @@ class MainActivity : Activity() {
     }
 
     private fun loadPairedDevices() {
-        val adapter = BluetoothAdapter.getDefaultAdapter() ?: return
+        val adapter = BluetoothAdapter.getDefaultAdapter()
+        if (adapter == null) {
+            status.text = "● Bluetooth unavailable"
+            status.setTextColor(0xFFFFAA33.toInt())
+            return
+        }
         if (android.os.Build.VERSION.SDK_INT >= 31 &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED
         ) return
-        paired = adapter.bondedDevices.toList().sortedBy { it.name ?: it.address }
-        deviceSpinner.adapter = ArrayAdapter(
-            this, android.R.layout.simple_spinner_dropdown_item,
-            paired.map { "${it.name ?: "Unknown"} • ${it.address}" }
-        )
+
+        try {
+            paired = adapter.bondedDevices.toList().sortedBy { it.name ?: it.address }
+            deviceSpinner.adapter = ArrayAdapter(
+                this,
+                android.R.layout.simple_spinner_dropdown_item,
+                paired.map { "${it.name ?: "Unknown"} • ${it.address}" }
+            )
+            if (paired.isEmpty()) {
+                status.text = "● No paired Bluetooth devices"
+                status.setTextColor(0xFFFFAA33.toInt())
+            }
+        } catch (t: SecurityException) {
+            status.text = "● Bluetooth permission required"
+            status.setTextColor(0xFFFFAA33.toInt())
+        }
     }
 
     private fun connectSelected() {
-        val device = paired.getOrNull(deviceSpinner.selectedItemPosition) ?: return
+        val device = paired.getOrNull(deviceSpinner.selectedItemPosition)
+        if (device == null) {
+            status.text = "● Select a paired device"
+            status.setTextColor(0xFFFFAA33.toInt())
+            return
+        }
+
         if (hid == null) {
             hid = ClassicHid.create(this) { connected, name ->
                 runOnUiThread {
@@ -141,13 +184,13 @@ class MainActivity : Activity() {
             }
             hid?.start()
         }
+
+        // ClassicHid queues this if the HID profile is still starting.
         hid?.connect(device)
     }
 
     private fun sendText(text: String) {
-        text.forEach { c ->
-            sendChar(c)
-        }
+        text.forEach(::sendChar)
     }
 
     private fun sendChar(c: Char): Boolean {
@@ -194,13 +237,23 @@ class MainActivity : Activity() {
                 override fun sendKeyEvent(event: android.view.KeyEvent): Boolean {
                     if (event.action == android.view.KeyEvent.ACTION_DOWN) {
                         when (event.keyCode) {
-                            android.view.KeyEvent.KEYCODE_ENTER -> { emit("\u0000${HidKeyMapper.ENTER}"); return true }
-                            android.view.KeyEvent.KEYCODE_TAB -> { emit("\u0000${HidKeyMapper.TAB}"); return true }
+                            android.view.KeyEvent.KEYCODE_ENTER -> {
+                                emit("\u0000${HidKeyMapper.ENTER}")
+                                return true
+                            }
+                            android.view.KeyEvent.KEYCODE_TAB -> {
+                                emit("\u0000${HidKeyMapper.TAB}")
+                                return true
+                            }
                         }
                     }
                     return super.sendKeyEvent(event)
                 }
             }
         }
+    }
+
+    companion object {
+        private const val REQUEST_BLUETOOTH = 77
     }
 }
