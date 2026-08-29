@@ -4,6 +4,7 @@ package com.loverofdarkness.remotekeyboard
 object HidKeyMapper {
     data class Mapping(val usage: Int, val modifier: Int = 0)
 
+    const val MODIFIER_LEFT_SHIFT = 0x02
     const val BACKSPACE = 0x2A
     const val TAB = 0x2B
     const val ENTER = 0x28
@@ -53,10 +54,10 @@ object HidKeyMapper {
 
     fun map(c: Char): Mapping? {
         val lower = c.lowercaseChar()
-        letters[lower]?.let { return Mapping(it, if (c.isUpperCase()) 0x02 else 0) }
+        letters[lower]?.let { return Mapping(it, if (c.isUpperCase()) MODIFIER_LEFT_SHIFT else 0) }
         digits[c]?.let { return Mapping(it) }
         plain[c]?.let { return Mapping(it) }
-        shifted[c]?.let { base -> return Mapping(map(base)?.usage ?: return null, 0x02) }
+        shifted[c]?.let { base -> return Mapping(map(base)?.usage ?: return null, MODIFIER_LEFT_SHIFT) }
         return null
     }
 }
