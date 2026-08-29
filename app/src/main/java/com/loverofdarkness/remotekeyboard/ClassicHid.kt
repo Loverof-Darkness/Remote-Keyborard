@@ -23,6 +23,7 @@ class ClassicHid private constructor(
     private var hid: BluetoothHidDevice? = null
     private var host: BluetoothDevice? = null
     private var pendingHost: BluetoothDevice? = null
+    private var lastHost: BluetoothDevice? = null
     private var reconnectAttempts = 0
     private var profileOpening = false
 
@@ -32,6 +33,7 @@ class ClassicHid private constructor(
             if (host != null) return
             if (hid == null) {
                 startProfile()
+                handler.postDelayed(this, PROFILE_WAIT_MS)
                 return
             }
             if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
@@ -44,9 +46,7 @@ class ClassicHid private constructor(
             reconnectAttempts++
             try {
                 Log.i(TAG, "HID reconnect attempt $reconnectAttempts")
-                if (!hid!!.connect(target)) {
-                    handler.postDelayed(this, RECONNECT_DELAY_MS)
-                }
+                if (!hid!!.connect(target)) handler.postDelayed(this, RECONNECT_DELAY_MS)
             } catch (t: Throwable) {
                 Log.w(TAG, "HID reconnect failed", t)
                 handler.postDelayed(this, RECONNECT_DELAY_MS)
@@ -68,7 +68,11 @@ class ClassicHid private constructor(
                 hid = null
                 host = null
                 onStateChanged(false, null)
-                if (pendingHost != null) handler.postDelayed(retryConnect, RECONNECT_DELAY_MS)
+                lastHost?.let {
+                    pendingHost = it
+                    reconnectAttempts = 0
+                    handler.postDelayed(retryConnect, RECONNECT_DELAY_MS)
+                }
             }
         }
     }
@@ -120,11 +124,16 @@ class ClassicHid private constructor(
         if (!registered) {
             host = null
             onStateChanged(false, null)
-            if (pendingHost != null) handler.postDelayed(retryConnect, RECONNECT_DELAY_MS)
+            lastHost?.let {
+                pendingHost = it
+                reconnectAttempts = 0
+                handler.postDelayed(retryConnect, RECONNECT_DELAY_MS)
+            }
             return
         }
         pluggedDevice?.let {
             host = it
+            lastHost = it
             pendingHost = null
             reconnectAttempts = 0
             handler.removeCallbacks(retryConnect)
@@ -141,6 +150,7 @@ class ClassicHid private constructor(
         when (state) {
             BluetoothProfile.STATE_CONNECTED -> {
                 host = device
+                lastHost = device
                 pendingHost = null
                 reconnectAttempts = 0
                 handler.removeCallbacks(retryConnect)
@@ -149,16 +159,15 @@ class ClassicHid private constructor(
             BluetoothProfile.STATE_DISCONNECTED -> {
                 if (host == device) host = null
                 onStateChanged(false, null)
-                if (pendingHost == device) {
+                if (lastHost == device) {
+                    pendingHost = device
                     reconnectAttempts = 0
+                    handler.removeCallbacks(retryConnect)
                     handler.postDelayed(retryConnect, RECONNECT_DELAY_MS)
                 }
             }
             BluetoothProfile.STATE_CONNECTING,
-            BluetoothProfile.STATE_DISCONNECTING -> {
-                // Keep the real connection state pending; don't report a false
-                // connected/disconnected transition while Android is changing it.
-            }
+            BluetoothProfile.STATE_DISCONNECTING -> Unit
             else -> Unit
         }
     }
@@ -177,11 +186,14 @@ class ClassicHid private constructor(
     override fun onVirtualCableUnplug(device: BluetoothDevice) {
         if (host == device) host = null
         if (pendingHost == device) pendingHost = null
+        if (lastHost == device) lastHost = null
+        handler.removeCallbacks(retryConnect)
         onStateChanged(false, null)
     }
 
     fun connect(device: BluetoothDevice) {
         if (host == device) return
+        lastHost = device
         pendingHost = device
         reconnectAttempts = 0
         handler.removeCallbacks(retryConnect)
@@ -202,9 +214,7 @@ class ClassicHid private constructor(
             return
         }
         try {
-            if (!service.connect(target)) {
-                handler.postDelayed(retryConnect, RECONNECT_DELAY_MS)
-            }
+            if (!service.connect(target)) handler.postDelayed(retryConnect, RECONNECT_DELAY_MS)
         } catch (t: Throwable) {
             Log.e(TAG, "HID connect failed", t)
             handler.postDelayed(retryConnect, RECONNECT_DELAY_MS)
@@ -214,6 +224,7 @@ class ClassicHid private constructor(
     fun disconnect() {
         handler.removeCallbacks(retryConnect)
         pendingHost = null
+        lastHost = null
         reconnectAttempts = 0
         val current = host
         if (current == null) {
@@ -221,9 +232,6 @@ class ClassicHid private constructor(
             return
         }
         try {
-            // Do not clear host until onConnectionStateChanged confirms the
-            // asynchronous disconnect. This prevents an immediate reconnect
-            // racing the old HID connection.
             hid?.disconnect(current)
         } catch (t: Throwable) {
             Log.w(TAG, "disconnect failed", t)
@@ -254,6 +262,7 @@ class ClassicHid private constructor(
     fun close() {
         handler.removeCallbacksAndMessages(null)
         pendingHost = null
+        lastHost = null
         host = null
         profileOpening = false
         try { hid?.unregisterApp() } catch (t: Throwable) { Log.w(TAG, "unregisterApp failed", t) }
