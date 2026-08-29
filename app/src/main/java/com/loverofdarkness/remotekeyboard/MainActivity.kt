@@ -76,6 +76,10 @@ class MainActivity : Activity() {
         root.addView(Button(this).apply { text = "Connect"; setOnClickListener { connectSelected() } })
         root.addView(Button(this).apply { text = "Disconnect"; setOnClickListener { hid?.disconnect() } })
         root.addView(Button(this).apply {
+            text = "Line Break ↵"
+            setOnClickListener { if (hid?.isConnected() == true) sendKey(HidKeyMapper.ENTER) }
+        })
+        root.addView(Button(this).apply {
             text = "Clear Text"
             setOnClickListener { typeField.setText(""); typeField.setSelection(0); typeField.requestFocus() }
         })
