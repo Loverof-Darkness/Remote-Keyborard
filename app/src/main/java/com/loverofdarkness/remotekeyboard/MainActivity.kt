@@ -10,6 +10,7 @@ import android.graphics.Color
 import android.os.Bundle
 import android.text.InputType
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputConnectionWrapper
@@ -154,17 +155,47 @@ class MainActivity : Activity() {
         hid?.connect(device)
     }
 
-    private fun sendText(text: String) = text.forEach(::sendChar)
+    /** Send each committed text character as a real HID press/release. */
+    private fun sendText(text: String) {
+        text.forEach { sendChar(it) }
+    }
 
     private fun sendChar(c: Char): Boolean {
         val mapping = HidKeyMapper.map(c) ?: return false
         return sendKey(mapping.usage, mapping.modifier)
     }
 
+    /** HID press followed by release. */
     private fun sendKey(usage: Int, modifier: Int = 0): Boolean {
         if (hid?.send(modifier, usage) != true) return false
         hid?.send(0, 0)
         return true
+    }
+
+    private fun sendKeyEvent(event: KeyEvent): Boolean {
+        if (event.action != KeyEvent.ACTION_DOWN) return true
+        val usage = when (event.keyCode) {
+            KeyEvent.KEYCODE_DEL -> HidKeyMapper.BACKSPACE
+            KeyEvent.KEYCODE_FORWARD_DEL -> HidKeyMapper.DELETE
+            KeyEvent.KEYCODE_ENTER -> HidKeyMapper.ENTER
+            KeyEvent.KEYCODE_TAB -> HidKeyMapper.TAB
+            KeyEvent.KEYCODE_ESCAPE -> HidKeyMapper.ESC
+            KeyEvent.KEYCODE_DPAD_RIGHT -> HidKeyMapper.RIGHT
+            KeyEvent.KEYCODE_DPAD_LEFT -> HidKeyMapper.LEFT
+            KeyEvent.KEYCODE_DPAD_DOWN -> HidKeyMapper.DOWN
+            KeyEvent.KEYCODE_DPAD_UP -> HidKeyMapper.UP
+            KeyEvent.KEYCODE_MOVE_HOME -> HidKeyMapper.HOME
+            KeyEvent.KEYCODE_MOVE_END -> HidKeyMapper.END
+            KeyEvent.KEYCODE_PAGE_UP -> HidKeyMapper.PAGE_UP
+            KeyEvent.KEYCODE_PAGE_DOWN -> HidKeyMapper.PAGE_DOWN
+            KeyEvent.KEYCODE_INSERT -> HidKeyMapper.INSERT
+            KeyEvent.KEYCODE_CAPS_LOCK -> HidKeyMapper.CAPS_LOCK
+            KeyEvent.KEYCODE_SYSRQ -> HidKeyMapper.PRINT_SCREEN
+            KeyEvent.KEYCODE_SCROLL_LOCK -> HidKeyMapper.SCROLL_LOCK
+            KeyEvent.KEYCODE_BREAK -> HidKeyMapper.PAUSE
+            else -> return false
+        }
+        return sendKey(usage)
     }
 
     override fun onDestroy() {
@@ -173,8 +204,8 @@ class MainActivity : Activity() {
         super.onDestroy()
     }
 
-    /** Uses the currently selected Android IME; no keyboard is bundled or replaced. */
-    private class RemoteEditText(context: Context, private val emit: (String) -> Unit) : EditText(context) {
+    /** Uses whichever native Android IME is currently active; no keyboard is bundled. */
+    private inner class RemoteEditText(context: Context, private val emit: (String) -> Unit) : EditText(context) {
         override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection {
             val base = super.onCreateInputConnection(outAttrs)
             return object : InputConnectionWrapper(base, false) {
@@ -185,30 +216,45 @@ class MainActivity : Activity() {
 
                 override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
                     if (beforeLength > 0) repeat(beforeLength.coerceAtMost(32)) { emit("\b") }
+                    if (afterLength > 0) repeat(afterLength.coerceAtMost(32)) { emit("\u0000${HidKeyMapper.DELETE}") }
                     return super.deleteSurroundingText(beforeLength, afterLength)
                 }
 
                 override fun deleteSurroundingTextInCodePoints(beforeLength: Int, afterLength: Int): Boolean {
                     if (beforeLength > 0) repeat(beforeLength.coerceAtMost(32)) { emit("\b") }
+                    if (afterLength > 0) repeat(afterLength.coerceAtMost(32)) { emit("\u0000${HidKeyMapper.DELETE}") }
                     return super.deleteSurroundingTextInCodePoints(beforeLength, afterLength)
                 }
 
-                override fun sendKeyEvent(event: android.view.KeyEvent): Boolean {
-                    if (event.action == android.view.KeyEvent.ACTION_DOWN) {
-                        when (event.keyCode) {
-                            android.view.KeyEvent.KEYCODE_ENTER -> {
-                                emit("\u0000${HidKeyMapper.ENTER}")
-                                return true
-                            }
-                            android.view.KeyEvent.KEYCODE_TAB -> {
-                                emit("\u0000${HidKeyMapper.TAB}")
-                                return true
-                            }
-                        }
-                    }
+                override fun sendKeyEvent(event: KeyEvent): Boolean {
+                    if (sendKeyEventToLaptop(event)) return true
                     return super.sendKeyEvent(event)
                 }
+
+                override fun performEditorAction(actionCode: Int): Boolean {
+                    // IMEs commonly use editor actions instead of KEYCODE_ENTER.
+                    if (actionCode == EditorInfo.IME_ACTION_DONE ||
+                        actionCode == EditorInfo.IME_ACTION_GO ||
+                        actionCode == EditorInfo.IME_ACTION_NEXT ||
+                        actionCode == EditorInfo.IME_ACTION_SEND ||
+                        actionCode == EditorInfo.IME_ACTION_SEARCH
+                    ) {
+                        sendKey(HidKeyMapper.ENTER)
+                        return true
+                    }
+                    return super.performEditorAction(actionCode)
+                }
+
+                override fun commitCompletion(text: android.view.inputmethod.CompletionInfo?): Boolean {
+                    text?.text?.toString()?.takeIf { it.isNotEmpty() }?.let(emit)
+                    return super.commitCompletion(text)
+                }
             }
+        }
+
+        private fun sendKeyEventToLaptop(event: KeyEvent): Boolean {
+            if (hid?.isConnected() != true) return false
+            return sendKeyEvent(event)
         }
     }
 
