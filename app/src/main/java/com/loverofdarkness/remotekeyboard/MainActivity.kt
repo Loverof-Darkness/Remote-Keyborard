@@ -20,8 +20,6 @@ import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.Spinner
 import android.widget.TextView
-import androidx.core.app.ActivityCompat
-import androidx.core.content.ContextCompat
 
 class MainActivity : Activity() {
     private lateinit var status: TextView
@@ -40,8 +38,8 @@ class MainActivity : Activity() {
     private fun requestBluetoothPermissions() {
         if (android.os.Build.VERSION.SDK_INT >= 31) {
             val needed = arrayOf(Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_SCAN)
-            val missing = needed.filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
-            if (missing.isNotEmpty()) ActivityCompat.requestPermissions(this, missing.toTypedArray(), REQUEST_BLUETOOTH)
+            val missing = needed.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
+            if (missing.isNotEmpty()) requestPermissions(missing.toTypedArray(), REQUEST_BLUETOOTH)
         }
     }
 
@@ -111,7 +109,7 @@ class MainActivity : Activity() {
 
     private fun loadPairedDevices() {
         val adapter = BluetoothAdapter.getDefaultAdapter() ?: return
-        if (android.os.Build.VERSION.SDK_INT >= 31 && ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) return
+        if (android.os.Build.VERSION.SDK_INT >= 31 && checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) return
         try {
             paired = adapter.bondedDevices.toList().sortedBy { it.name ?: it.address }
             deviceSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, paired.map { "${it.name ?: "Unknown"} • ${it.address}" })
