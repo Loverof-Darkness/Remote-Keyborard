@@ -27,7 +27,6 @@ class ClassicHid private constructor(
             hid = proxy
             register()
         }
-
         override fun onServiceDisconnected(profile: Int) {
             if (profile == BluetoothProfile.HID_DEVICE) {
                 hid = null
@@ -63,9 +62,8 @@ class ClassicHid private constructor(
             BluetoothHidDeviceAppQosSettings.SERVICE_BEST_EFFORT,
             800, 9, 10, 600, 0xFFFFFFFF.toInt()
         )
-        val executor = Executor { it.run() }
         try {
-            service.registerApp(sdp, qos, qos, executor, this)
+            service.registerApp(sdp, qos, qos, Executor { it.run() }, this)
         } catch (t: Throwable) {
             Log.e(TAG, "registerApp failed", t)
             onStateChanged(false, null)
@@ -78,18 +76,13 @@ class ClassicHid private constructor(
             onStateChanged(false, null)
             return
         }
-
-        // The HID service becomes available asynchronously. A connect request
-        // made before registration used to be silently lost; retry it here.
-        val device = pendingHost
-        if (device != null) {
+        pendingHost?.let {
             pendingHost = null
-            connect(device)
+            connect(it)
         }
-
-        if (pluggedDevice != null) {
-            host = pluggedDevice
-            onStateChanged(true, safeName(pluggedDevice))
+        pluggedDevice?.let {
+            host = it
+            onStateChanged(true, safeName(it))
         }
     }
 
@@ -105,10 +98,10 @@ class ClassicHid private constructor(
     }
 
     override fun onGetReport(device: BluetoothDevice, type: Byte, id: Byte, bufferSize: Int) {
-        val payload = ReportBuilder.keyboardEmpty()
         try {
-            hid?.replyReport(device, type, id, payload)
-        } catch (_: Throwable) {
+            hid?.replyReport(device, type, id, ReportBuilder.keyboardEmpty())
+        } catch (t: Throwable) {
+            Log.w(TAG, "replyReport failed", t)
         }
     }
 
@@ -134,33 +127,38 @@ class ClassicHid private constructor(
             }
         } catch (t: Throwable) {
             pendingHost = device
-            Log.e(TAG, "connect failed", t)
+            Log.e(TAG, "HID connect failed", t)
         }
     }
 
     fun disconnect() {
         pendingHost = null
         val current = host ?: return
+        try { hid?.disconnect(current) } catch (t: Throwable) { Log.w(TAG, "disconnect failed", t) }
         host = null
-        try {
-            hid?.disconnect(current)
-        } catch (_: Throwable) {
-        }
         onStateChanged(false, null)
     }
 
     fun isConnected(): Boolean = host != null
 
+    /**
+     * AOSP BluetoothHidDevice.sendReport() takes an INT report ID.
+     * The previous compile stub incorrectly declared BYTE, which compiled
+     * but caused a runtime method-signature mismatch on real Android.
+     */
     fun send(modifiers: Int, usage: Int): Boolean {
         val service = hid ?: return false
         val device = host ?: return false
         return try {
-            service.sendReport(
+            val accepted = service.sendReport(
                 device,
-                HidReports.REPORT_ID_KEYBOARD.toByte(),
+                HidReports.REPORT_ID_KEYBOARD,
                 ReportBuilder.keyboard(modifiers, usage)
             )
-        } catch (_: Throwable) {
+            if (!accepted) Log.w(TAG, "sendReport rejected by HID service")
+            accepted
+        } catch (t: Throwable) {
+            Log.e(TAG, "sendReport failed", t)
             false
         }
     }
@@ -168,29 +166,18 @@ class ClassicHid private constructor(
     fun close() {
         pendingHost = null
         host = null
-        try {
-            hid?.unregisterApp()
-        } catch (_: Throwable) {
-        }
-        try {
-            adapter?.closeProfileProxy(BluetoothProfile.HID_DEVICE, hid)
-        } catch (_: Throwable) {
-        }
+        try { hid?.unregisterApp() } catch (t: Throwable) { Log.w(TAG, "unregisterApp failed", t) }
+        try { adapter?.closeProfileProxy(BluetoothProfile.HID_DEVICE, hid) } catch (_: Throwable) {}
         hid = null
     }
 
     private fun safeName(device: BluetoothDevice): String = try {
         device.name?.takeIf { it.isNotBlank() } ?: device.address
-    } catch (_: Throwable) {
-        try { device.address } catch (_: Throwable) { "Bluetooth host" }
-    }
+    } catch (_: Throwable) { "Bluetooth host" }
 
     companion object {
         private const val TAG = "RemoteKeyboardHid"
-
-        fun create(
-            context: Context,
-            onStateChanged: (Boolean, String?) -> Unit
-        ) = ClassicHid(context.applicationContext, onStateChanged)
+        fun create(context: Context, onStateChanged: (Boolean, String?) -> Unit) =
+            ClassicHid(context.applicationContext, onStateChanged)
     }
 }
