@@ -1,5 +1,6 @@
 package com.loverofdarkness.remotekeyboard
 
+/** Maps Android text/key input to USB HID keyboard usage codes. */
 object HidKeyMapper {
     data class Mapping(val usage: Int, val modifier: Int = 0)
 
@@ -7,6 +8,20 @@ object HidKeyMapper {
     const val TAB = 0x2B
     const val ENTER = 0x28
     const val ESC = 0x29
+    const val INSERT = 0x49
+    const val DELETE = 0x4C
+    const val RIGHT = 0x4F
+    const val LEFT = 0x50
+    const val DOWN = 0x51
+    const val UP = 0x52
+    const val HOME = 0x4A
+    const val END = 0x4D
+    const val PAGE_UP = 0x4B
+    const val PAGE_DOWN = 0x4E
+    const val CAPS_LOCK = 0x39
+    const val PRINT_SCREEN = 0x46
+    const val SCROLL_LOCK = 0x47
+    const val PAUSE = 0x48
 
     private val letters = mapOf(
         'a' to 0x04, 'b' to 0x05, 'c' to 0x06, 'd' to 0x07, 'e' to 0x08,
@@ -38,14 +53,10 @@ object HidKeyMapper {
 
     fun map(c: Char): Mapping? {
         val lower = c.lowercaseChar()
-        letters[lower]?.let {
-            return Mapping(it, if (c.isUpperCase()) 0x02 else 0)
-        }
+        letters[lower]?.let { return Mapping(it, if (c.isUpperCase()) 0x02 else 0) }
         digits[c]?.let { return Mapping(it) }
         plain[c]?.let { return Mapping(it) }
-        shifted[c]?.let { base ->
-            return Mapping(map(base)?.usage ?: return null, 0x02)
-        }
+        shifted[c]?.let { base -> return Mapping(map(base)?.usage ?: return null, 0x02) }
         return null
     }
 }
