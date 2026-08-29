@@ -50,13 +50,19 @@ jobs:
             app/stubs-src/android/bluetooth/BluetoothHidDeviceAppQosSettings.java
           jar cf app/stubs/hidden-android.jar -C /tmp/hid-stubs-classes .
 
-      - name: Build debug APK
-        run: gradle --no-daemon --stacktrace assembleDebug
+      - name: Build optimized release APK
+        run: gradle --no-daemon --stacktrace assembleRelease
 
-      - name: Upload debug APK
+      - name: Report APK size
+        shell: bash
+        run: |
+          set -euo pipefail
+          ls -lh app/build/outputs/apk/release/*.apk
+
+      - name: Upload optimized APK
         uses: actions/upload-artifact@v4
         with:
-          name: remote-keyboard-debug
-          path: app/build/outputs/apk/debug/*.apk
+          name: remote-keyboard-release
+          path: app/build/outputs/apk/release/*.apk
           if-no-files-found: error
           retention-days: 14
