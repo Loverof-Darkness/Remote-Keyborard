@@ -5,9 +5,11 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Do not cancel a build just because another commit was pushed.
+# This makes every main-branch build complete and exposes real failures.
 concurrency:
   group: build-apk-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -28,6 +30,8 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
 
       - name: Install Android SDK packages
         run: sdkmanager --install "platforms;android-35" "build-tools;35.0.0"
@@ -51,7 +55,7 @@ jobs:
           jar cf app/stubs/hidden-android.jar -C /tmp/hid-stubs-classes .
 
       - name: Build optimized release APK
-        run: gradle --no-daemon --stacktrace assembleRelease
+        run: gradle --no-daemon --stacktrace clean assembleRelease
 
       - name: Sign and verify optimized release APK
         shell: bash
