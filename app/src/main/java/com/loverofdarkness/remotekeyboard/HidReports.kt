@@ -26,12 +26,10 @@ object ReportBuilder {
     const val MOD_LEFT_ALT = 0x04
     const val MOD_LEFT_GUI = 0x08
 
-    fun keyboard(modifiers: Int, usage: Int): ByteArray {
-        return byteArrayOf(
-            modifiers.toByte(), 0,
-            usage.toByte(), 0, 0, 0, 0, 0, 0
-        )
-    }
+    fun keyboard(modifiers: Int, usage: Int): ByteArray = byteArrayOf(
+        modifiers.toByte(), 0,
+        usage.toByte(), 0, 0, 0, 0, 0, 0
+    )
 
     fun keyboardEmpty(): ByteArray = keyboard(0, 0)
 }
