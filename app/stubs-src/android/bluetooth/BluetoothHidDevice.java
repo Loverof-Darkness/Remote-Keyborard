@@ -14,6 +14,9 @@ public abstract class BluetoothHidDevice implements BluetoothProfile {
     public static final byte REPORT_TYPE_OUTPUT = (byte) 2;
     public static final byte REPORT_TYPE_FEATURE = (byte) 3;
 
+    public static final byte PROTOCOL_BOOT_MODE = (byte) 0x00;
+    public static final byte PROTOCOL_REPORT_MODE = (byte) 0x01;
+
     public abstract static class Callback {
         public void onAppStatusChanged(BluetoothDevice pluggedDevice, boolean registered) {}
         public void onConnectionStateChanged(BluetoothDevice device, int state) {}
@@ -24,18 +27,9 @@ public abstract class BluetoothHidDevice implements BluetoothProfile {
         public void onVirtualCableUnplug(BluetoothDevice device) {}
     }
 
-    public boolean registerApp(
-            BluetoothHidDeviceAppSdpSettings sdp,
-            BluetoothHidDeviceAppQosSettings inQos,
-            BluetoothHidDeviceAppQosSettings outQos,
-            Executor executor,
-            Callback callback) { return false; }
-
+    public boolean registerApp(BluetoothHidDeviceAppSdpSettings sdp, BluetoothHidDeviceAppQosSettings inQos, BluetoothHidDeviceAppQosSettings outQos, Executor executor, Callback callback) { return false; }
     public boolean unregisterApp() { return false; }
-
-    /** AOSP signature: report ID is an int, not a byte. */
     public boolean sendReport(BluetoothDevice device, int id, byte[] data) { return false; }
-
     public boolean replyReport(BluetoothDevice device, byte type, byte id, byte[] data) { return false; }
     public boolean reportError(BluetoothDevice device, byte error) { return false; }
     public boolean connect(BluetoothDevice device) { return false; }
