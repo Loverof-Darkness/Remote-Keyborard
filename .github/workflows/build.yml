@@ -53,12 +53,20 @@ jobs:
       - name: Build optimized release APK
         run: gradle --no-daemon --stacktrace assembleRelease
 
-      - name: Sign optimized release APK
+      - name: Sign and verify optimized release APK
         shell: bash
         run: |
           set -euo pipefail
-          APK="app/build/outputs/apk/release/app-release.apk"
-          ALIGNED="app/build/outputs/apk/release/app-release-aligned.apk"
+          BUILD_DIR="app/build/outputs/apk/release"
+          UNSIGNED_APK="$(find "$BUILD_DIR" -maxdepth 1 -type f -name '*-unsigned.apk' -print -quit)"
+          if [[ -z "$UNSIGNED_APK" ]]; then
+            echo "ERROR: No unsigned release APK found"
+            find "$BUILD_DIR" -maxdepth 1 -type f -print
+            exit 1
+          fi
+
+          SIGNED_APK="$BUILD_DIR/remote-keyboard.apk"
+          ALIGNED_APK="$BUILD_DIR/remote-keyboard-aligned.apk"
           KEYSTORE="$RUNNER_TEMP/remote-keyboard.keystore"
           ALIAS="remote-keyboard"
           PASS="android"
@@ -73,29 +81,26 @@ jobs:
             -validity 10000 \
             -dname "CN=Remote Keyboard, OU=Build, O=Loverof-Darkness, L=NA, ST=NA, C=IN"
 
-          "$ANDROID_HOME/build-tools/35.0.0/zipalign" -f -p 4 "$APK" "$ALIGNED"
+          "$ANDROID_HOME/build-tools/35.0.0/zipalign" -f -p 4 "$UNSIGNED_APK" "$ALIGNED_APK"
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" sign \
             --ks "$KEYSTORE" \
             --ks-pass pass:"$PASS" \
             --key-pass pass:"$PASS" \
             --ks-key-alias "$ALIAS" \
-            --out "$APK" \
-            "$ALIGNED"
-          rm -f "$ALIGNED"
+            --out "$SIGNED_APK" \
+            "$ALIGNED_APK"
 
-          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$APK"
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$SIGNED_APK"
+          rm -f "$UNSIGNED_APK" "$ALIGNED_APK"
 
-      - name: Report APK size
-        shell: bash
-        run: |
-          set -euo pipefail
-          ls -lh app/build/outputs/apk/release/*.apk
-          du -h app/build/outputs/apk/release/app-release.apk
+          echo "Installable APK: $SIGNED_APK"
+          ls -lh "$SIGNED_APK"
+          sha256sum "$SIGNED_APK"
 
       - name: Upload installable APK
         uses: actions/upload-artifact@v4
         with:
-          name: remote-keyboard-release
-          path: app/build/outputs/apk/release/app-release.apk
+          name: remote-keyboard-installable
+          path: app/build/outputs/apk/release/remote-keyboard.apk
           if-no-files-found: error
           retention-days: 14
