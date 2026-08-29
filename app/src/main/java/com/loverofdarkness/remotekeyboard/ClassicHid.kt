@@ -8,304 +8,144 @@ import android.bluetooth.BluetoothHidDeviceAppSdpSettings
 import android.bluetooth.BluetoothProfile
 import android.content.Context
 import android.os.Build
-import android.os.Handler
-import android.os.HandlerThread
-import android.os.Looper
 import android.util.Log
 import java.util.concurrent.Executor
-import java.util.concurrent.LinkedBlockingQueue
 
 /** Minimal Bluetooth Classic HID keyboard bridge. */
 class ClassicHid private constructor(
-    context: Context,
+    private val context: Context,
     private val onStateChanged: (Boolean, String?) -> Unit
 ) : BluetoothHidDevice.Callback() {
-    private val appContext = context.applicationContext
-    private val adapter = BluetoothAdapter.getDefaultAdapter()
-    private val handler = Handler(Looper.getMainLooper())
-    private val senderThread = HandlerThread("RemoteKeyboard-HidSender").apply { start() }
-    private val senderHandler = Handler(senderThread.looper)
-    private val reportQueue = LinkedBlockingQueue<ByteArray>(256)
-
-    @Volatile private var senderClosed = false
-    @Volatile private var hid: BluetoothHidDevice? = null
-    @Volatile private var host: BluetoothDevice? = null
-
-    private var pendingHost: BluetoothDevice? = null
+    private var device: BluetoothHidDevice? = null
+    private var host: BluetoothDevice? = null
     private var lastHost: BluetoothDevice? = null
-    private var profileOpening = false
-    private var appRegistered = false
-    private var connecting = false
-    private var manualDisconnect = false
-    private var drainScheduled = false
 
-    private val retryConnect = object : Runnable {
-        override fun run() {
-            if (senderClosed || manualDisconnect || host != null) return
-            val target = pendingHost ?: lastHost ?: return
-            val service = hid
-            if (adapter == null || !adapter.isEnabled || service == null || !appRegistered || connecting) return
-            connecting = true
-            try {
-                Log.i(TAG, "HID connect attempt to ${safeName(target)}")
-                if (!service.connect(target)) connecting = false
-            } catch (t: Throwable) {
-                connecting = false
-                Log.w(TAG, "HID connect failed", t)
-            }
-        }
-    }
-
-    private val drainReports = object : Runnable {
-        override fun run() {
-            drainScheduled = false
-            if (senderClosed) return
-            val service = hid ?: return
-            val device = host ?: return
-            if (!appRegistered) return
-            val report = reportQueue.poll() ?: return
-            try {
-                // Keep the same Report ID in every mode. The known-working
-                // BluetoothRemoteHid implementation does not switch the ID
-                // after SET_PROTOCOL; changing it can make Linux tear down the
-                // HID interrupt channel on the first keyboard report.
-                val accepted = service.sendReport(device, HidReports.REPORT_ID_KEYBOARD, report)
-                if (!accepted) Log.w(TAG, "sendReport rejected")
-            } catch (t: Throwable) {
-                Log.w(TAG, "sendReport failed", t)
-            }
-            if (reportQueue.isNotEmpty() && host == device && appRegistered && !senderClosed) {
-                drainScheduled = true
-                senderHandler.postDelayed(this, REPORT_GAP_MS)
-            }
-        }
-    }
-
-    private val profileListener = object : BluetoothProfile.ServiceListener {
+    private val serviceListener = object : BluetoothProfile.ServiceListener {
         override fun onServiceConnected(profile: Int, proxy: BluetoothProfile) {
-            if (profile != BluetoothProfile.HID_DEVICE || proxy !is BluetoothHidDevice) return
-            profileOpening = false
-            hid = proxy
-            appRegistered = false
-            register()
+            if (profile == BluetoothProfile.HID_DEVICE && proxy is BluetoothHidDevice) {
+                device = proxy
+                registerApp()
+            }
         }
 
         override fun onServiceDisconnected(profile: Int) {
-            if (profile != BluetoothProfile.HID_DEVICE) return
-            profileOpening = false
-            appRegistered = false
-            hid = null
-            host = null
-            connecting = false
-            clearQueuedReports()
-            onStateChanged(false, null)
-        }
-    }
-
-    fun start() {
-        manualDisconnect = false
-        if (Build.VERSION.SDK_INT < 28 || adapter == null || !adapter.isEnabled) {
-            onStateChanged(false, null)
-            return
-        }
-        if (hid != null || profileOpening) return
-        profileOpening = true
-        try {
-            adapter.getProfileProxy(appContext, profileListener, BluetoothProfile.HID_DEVICE)
-        } catch (t: Throwable) {
-            profileOpening = false
-            Log.e(TAG, "Unable to open HID profile", t)
-            onStateChanged(false, null)
-        }
-    }
-
-    private fun register() {
-        val service = hid ?: return
-        val sdp = BluetoothHidDeviceAppSdpSettings(
-            "Remote Keyboard",
-            "Native Android keyboard bridge",
-            "Loverof-Darkness",
-            BluetoothHidDevice.SUBCLASS1_KEYBOARD,
-            HidReports.KEYBOARD_DESCRIPTOR
-        )
-        val max = BluetoothHidDeviceAppQosSettings.MAX
-        val qos = BluetoothHidDeviceAppQosSettings(
-            BluetoothHidDeviceAppQosSettings.SERVICE_BEST_EFFORT,
-            max, max, max, max, max
-        )
-        try {
-            service.registerApp(sdp, qos, qos, Executor { it.run() }, this)
-        } catch (t: Throwable) {
-            appRegistered = false
-            Log.e(TAG, "registerApp failed", t)
-            onStateChanged(false, null)
+            if (profile == BluetoothProfile.HID_DEVICE) {
+                device = null
+                host = null
+                onStateChanged(false, null)
+            }
         }
     }
 
     override fun onAppStatusChanged(pluggedDevice: BluetoothDevice?, registered: Boolean) {
-        appRegistered = registered
         if (!registered) {
             host = null
-            connecting = false
-            clearQueuedReports()
             onStateChanged(false, null)
             return
         }
         if (pluggedDevice != null) {
             host = pluggedDevice
             lastHost = pluggedDevice
-            pendingHost = null
-            connecting = false
-            onStateChanged(true, safeName(pluggedDevice))
-            scheduleDrain()
-        } else if (pendingHost != null && !manualDisconnect) {
-            handler.post(retryConnect)
+        } else if (host == null && lastHost != null) {
+            try { device?.connect(lastHost) } catch (t: Throwable) {
+                Log.w(TAG, "reconnect failed", t)
+            }
         }
+        onStateChanged(host != null, host?.let(::safeName))
     }
 
-    override fun onConnectionStateChanged(device: BluetoothDevice, state: Int) {
-        when (state) {
-            BluetoothProfile.STATE_CONNECTED -> {
-                host = device
-                lastHost = device
-                pendingHost = null
-                connecting = false
-                onStateChanged(true, safeName(device))
-                scheduleDrain()
-            }
-            BluetoothProfile.STATE_CONNECTING -> {
-                if (!manualDisconnect) {
-                    pendingHost = pendingHost ?: lastHost ?: device
-                    connecting = true
-                }
-            }
-            BluetoothProfile.STATE_DISCONNECTED -> {
-                if (host == device) host = null
-                connecting = false
-                clearQueuedReports()
-                onStateChanged(false, null)
-            }
-            BluetoothProfile.STATE_DISCONNECTING -> Unit
+    override fun onConnectionStateChanged(remote: BluetoothDevice, state: Int) {
+        if (state == BluetoothProfile.STATE_CONNECTED) {
+            host = remote
+            lastHost = remote
+        } else if (host == remote) {
+            host = null
         }
+        onStateChanged(host != null, host?.let(::safeName))
     }
 
-    override fun onGetReport(device: BluetoothDevice, type: Byte, id: Byte, bufferSize: Int) {
-        val requestedId = id.toInt() and 0xFF
-        val payload = if (requestedId == 0xFE) {
+    override fun onGetReport(remote: BluetoothDevice, type: Byte, id: Byte, bufferSize: Int) {
+        val payload = if ((id.toInt() and 0xFF) == 0xFE) {
             HidReports.HID_INFORMATION
         } else {
             ReportBuilder.keyboardEmpty()
         }
-        try {
-            hid?.replyReport(device, type, id, payload)
-        } catch (t: Throwable) {
-            Log.w(TAG, "replyReport failed id=$requestedId", t)
-        }
+        try { device?.replyReport(remote, type, id, payload) }
+        catch (t: Throwable) { Log.w(TAG, "replyReport failed", t) }
     }
 
-    // Intentionally do not override onSetProtocol. The reference HID
-    // implementation keeps sending its declared keyboard Report ID after the
-    // host requests boot/report protocol switching.
-    override fun onSetReport(device: BluetoothDevice, type: Byte, id: Byte, data: ByteArray) = Unit
-    override fun onInterruptData(device: BluetoothDevice, reportId: Byte, data: ByteArray) = Unit
-
-    override fun onVirtualCableUnplug(device: BluetoothDevice) {
-        if (host == device) host = null
-        if (pendingHost == device) pendingHost = null
-        if (lastHost == device) lastHost = null
-        connecting = false
-        clearQueuedReports()
+    override fun onSetReport(remote: BluetoothDevice, type: Byte, id: Byte, data: ByteArray) = Unit
+    override fun onVirtualCableUnplug(remote: BluetoothDevice) {
+        host = null
         onStateChanged(false, null)
     }
+    override fun onInterruptData(remote: BluetoothDevice, reportId: Byte, data: ByteArray) = Unit
 
-    fun connect(device: BluetoothDevice) {
-        manualDisconnect = false
-        if (host == device && appRegistered) return
-        lastHost = device
-        pendingHost = device
-        connecting = false
-        clearQueuedReports()
-        handler.removeCallbacks(retryConnect)
-        if (hid == null) {
-            start()
-            return
-        }
-        if (!appRegistered) {
-            register()
-            return
-        }
-        handler.post(retryConnect)
+    override fun start() {
+        if (Build.VERSION.SDK_INT < 28) return
+        val adapter = BluetoothAdapter.getDefaultAdapter() ?: return
+        if (!adapter.isEnabled || device != null) return
+        try { adapter.getProfileProxy(context.applicationContext, serviceListener, BluetoothProfile.HID_DEVICE) }
+        catch (t: Throwable) { Log.w(TAG, "getProfileProxy failed", t) }
+    }
+
+    private fun registerApp() {
+        val d = device ?: return
+        // Match the known-working reference registration exactly first. The
+        // reference uses a COMBO subclass and a combined descriptor; Windows
+        // and Linux hosts accept this SDP/HID registration reliably.
+        val sdp = BluetoothHidDeviceAppSdpSettings(
+            "BT HID Remote",
+            "Bluetooth keyboard, mouse and presenter",
+            "Md. Yaleed Haque",
+            BluetoothHidDevice.SUBCLASS1_COMBO,
+            HidReports.COMBINED_DESCRIPTOR
+        )
+        val max = BluetoothHidDeviceAppQosSettings.MAX
+        val qos = BluetoothHidDeviceAppQosSettings(
+            BluetoothHidDeviceAppQosSettings.SERVICE_BEST_EFFORT,
+            max, max, max, max, max
+        )
+        try { d.registerApp(sdp, qos, qos, Executor { it.run() }, this) }
+        catch (t: Throwable) { Log.w(TAG, "registerApp failed", t) }
+    }
+
+    fun connect(remote: BluetoothDevice) {
+        lastHost = remote
+        try { device?.connect(remote) }
+        catch (t: Throwable) { Log.w(TAG, "connect failed", t) }
     }
 
     fun disconnect() {
-        manualDisconnect = true
-        handler.removeCallbacks(retryConnect)
-        pendingHost = null
-        lastHost = null
-        connecting = false
-        clearQueuedReports()
-        val current = host
-        if (current == null) {
-            onStateChanged(false, null)
-            return
-        }
-        try {
-            hid?.disconnect(current)
-        } catch (t: Throwable) {
-            Log.w(TAG, "disconnect failed", t)
-            host = null
-            onStateChanged(false, null)
-        }
+        val h = host ?: return
+        host = null
+        try { device?.disconnect(h) } catch (t: Throwable) { Log.w(TAG, "disconnect failed", t) }
+        onStateChanged(false, null)
     }
 
-    fun isConnected(): Boolean = host != null && appRegistered
+    fun isConnected(): Boolean = host != null
 
     fun send(modifiers: Int, usage: Int): Boolean {
-        if (!isConnected() || senderClosed) return false
-        val accepted = reportQueue.offer(ReportBuilder.keyboard(modifiers, usage))
-        if (accepted) scheduleDrain()
-        return accepted
-    }
-
-    private fun scheduleDrain() {
-        if (senderClosed || drainScheduled) return
-        drainScheduled = true
-        senderHandler.post(drainReports)
-    }
-
-    private fun clearQueuedReports() {
-        reportQueue.clear()
-        senderHandler.removeCallbacks(drainReports)
-        drainScheduled = false
+        val d = device ?: return false
+        val h = host ?: return false
+        return try { d.sendReport(h, HidReports.REPORT_ID_KEYBOARD, ReportBuilder.keyboard(modifiers, usage)) }
+        catch (t: Throwable) { Log.w(TAG, "sendReport failed", t); false }
     }
 
     fun close() {
-        manualDisconnect = true
-        handler.removeCallbacksAndMessages(null)
-        clearQueuedReports()
-        pendingHost = null
-        lastHost = null
         host = null
-        profileOpening = false
-        appRegistered = false
-        connecting = false
-        try { hid?.unregisterApp() } catch (_: Throwable) {}
-        try { adapter?.closeProfileProxy(BluetoothProfile.HID_DEVICE, hid) } catch (_: Throwable) {}
-        hid = null
-        senderClosed = true
-        senderHandler.removeCallbacksAndMessages(null)
-        senderThread.quitSafely()
+        val d = device
+        device = null
+        try { d?.unregisterApp() } catch (_: Throwable) {}
+        try { BluetoothAdapter.getDefaultAdapter()?.closeProfileProxy(BluetoothProfile.HID_DEVICE, d) } catch (_: Throwable) {}
     }
 
-    private fun safeName(device: BluetoothDevice): String = try {
-        device.name?.takeIf { it.isNotBlank() } ?: device.address
+    private fun safeName(d: BluetoothDevice): String = try {
+        d.name?.takeIf { it.isNotBlank() } ?: d.address
     } catch (_: Throwable) { "Bluetooth host" }
 
     companion object {
         private const val TAG = "RemoteKeyboardHid"
-        private const val REPORT_GAP_MS = 12L
-
-        fun create(context: Context, onStateChanged: (Boolean, String?) -> Unit) =
-            ClassicHid(context.applicationContext, onStateChanged)
+        fun create(context: Context, onStateChanged: (Boolean, String?) -> Unit) = ClassicHid(context.applicationContext, onStateChanged)
     }
 }
