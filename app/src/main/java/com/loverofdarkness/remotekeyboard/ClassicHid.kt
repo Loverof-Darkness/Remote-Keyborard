@@ -110,6 +110,8 @@ class ClassicHid private constructor(
         onStateChanged(false, null)
     }
 
+    fun isConnected(): Boolean = host != null
+
     fun send(modifiers: Int, usage: Int): Boolean {
         val h = hid ?: return false
         val d = host ?: return false
