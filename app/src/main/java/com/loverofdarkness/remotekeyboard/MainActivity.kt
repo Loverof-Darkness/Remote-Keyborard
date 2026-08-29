@@ -211,6 +211,12 @@ class MainActivity : Activity() {
                 }
 
                 override fun sendKeyEvent(event: KeyEvent): Boolean {
+                    val isShiftEnter = event.keyCode == KeyEvent.KEYCODE_ENTER && event.isShiftPressed
+                    if (isShiftEnter && event.action == KeyEvent.ACTION_DOWN) {
+                        // Shift+Enter is a local line break, not a remote Enter.
+                        // Let the native EditText/IME process it normally.
+                        return super.sendKeyEvent(event)
+                    }
                     val handled = sendKeyEventToLaptop(event)
                     val local = super.sendKeyEvent(event)
                     return handled || local
