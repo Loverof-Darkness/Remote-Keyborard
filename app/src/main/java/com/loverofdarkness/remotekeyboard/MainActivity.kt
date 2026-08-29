@@ -47,12 +47,7 @@ class MainActivity : Activity() {
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode != REQUEST_BLUETOOTH) return
-        if (grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) loadPairedDevices()
-        else {
-            status.text = "● Bluetooth permission required"
-            status.setTextColor(0xFFFFAA33.toInt())
-        }
+        if (requestCode == REQUEST_BLUETOOTH && grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) loadPairedDevices()
     }
 
     private fun buildUi() {
@@ -66,8 +61,7 @@ class MainActivity : Activity() {
             textSize = 26f
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
-        }, LinearLayout.LayoutParams(-1, -2))
-
+        })
         status = TextView(this).apply {
             text = "● Disconnected"
             textSize = 16f
@@ -75,27 +69,36 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER
             setPadding(0, 20, 0, 20)
         }
-        root.addView(status, LinearLayout.LayoutParams(-1, -2))
+        root.addView(status)
         deviceSpinner = Spinner(this)
-        root.addView(deviceSpinner, LinearLayout.LayoutParams(-1, -2))
+        root.addView(deviceSpinner)
         root.addView(Button(this).apply {
             text = "Refresh Paired Devices"
             setOnClickListener { loadPairedDevices() }
-        }, LinearLayout.LayoutParams(-1, -2))
+        })
         root.addView(Button(this).apply {
             text = "Connect"
             setOnClickListener { connectSelected() }
-        }, LinearLayout.LayoutParams(-1, -2))
+        })
         root.addView(Button(this).apply {
             text = "Disconnect"
             setOnClickListener { hid?.disconnect() }
-        }, LinearLayout.LayoutParams(-1, -2))
+        })
+        root.addView(Button(this).apply {
+            text = "Clear Text"
+            setOnClickListener {
+                typeField.setText("")
+                typeField.setSelection(0)
+                typeField.requestFocus()
+            }
+        })
 
         typeField = RemoteEditText(this) { token ->
             if (hid?.isConnected() != true) return@RemoteEditText
             when {
                 token == "\b" -> sendKey(HidKeyMapper.BACKSPACE)
                 token.startsWith("\u0000") -> token.substring(1).toIntOrNull()?.let(::sendKey)
+                token == "\n" -> sendKey(HidKeyMapper.ENTER)
                 else -> sendText(token)
             }
         }.apply {
@@ -116,33 +119,17 @@ class MainActivity : Activity() {
     }
 
     private fun loadPairedDevices() {
-        val adapter = BluetoothAdapter.getDefaultAdapter()
-        if (adapter == null) {
-            status.text = "● Bluetooth unavailable"
-            status.setTextColor(0xFFFFAA33.toInt())
-            return
-        }
+        val adapter = BluetoothAdapter.getDefaultAdapter() ?: return
         if (android.os.Build.VERSION.SDK_INT >= 31 && ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) return
         try {
             paired = adapter.bondedDevices.toList().sortedBy { it.name ?: it.address }
             deviceSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, paired.map { "${it.name ?: "Unknown"} • ${it.address}" })
-            if (paired.isEmpty()) {
-                status.text = "● No paired Bluetooth devices"
-                status.setTextColor(0xFFFFAA33.toInt())
-            }
-        } catch (_: SecurityException) {
-            status.text = "● Bluetooth permission required"
-            status.setTextColor(0xFFFFAA33.toInt())
-        }
+            if (paired.isEmpty()) status.text = "● No paired Bluetooth devices"
+        } catch (_: SecurityException) { status.text = "● Bluetooth permission required" }
     }
 
     private fun connectSelected() {
-        val device = paired.getOrNull(deviceSpinner.selectedItemPosition)
-        if (device == null) {
-            status.text = "● Select a paired device"
-            status.setTextColor(0xFFFFAA33.toInt())
-            return
-        }
+        val device = paired.getOrNull(deviceSpinner.selectedItemPosition) ?: return
         if (hid == null) {
             hid = ClassicHid.create(this) { connected, name ->
                 runOnUiThread {
@@ -155,9 +142,7 @@ class MainActivity : Activity() {
         hid?.connect(device)
     }
 
-    private fun sendText(text: String) {
-        text.forEach { sendChar(it) }
-    }
+    private fun sendText(text: String) { text.forEach { sendChar(it) } }
 
     private fun sendChar(c: Char): Boolean {
         val mapping = HidKeyMapper.map(c) ?: return false
@@ -202,38 +187,33 @@ class MainActivity : Activity() {
         super.onDestroy()
     }
 
-    /** Uses whichever native Android IME is currently active; no keyboard is bundled. */
     private inner class RemoteEditText(context: Context, private val emit: (String) -> Unit) : EditText(context) {
         override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection {
             val base = super.onCreateInputConnection(outAttrs)
             return object : InputConnectionWrapper(base, false) {
                 override fun commitText(text: CharSequence?, newCursorPosition: Int): Boolean {
-                    text?.toString()?.takeIf { it.isNotEmpty() }?.let(emit)
+                    text?.toString()?.takeIf { it.isNotEmpty() }?.let { committed ->
+                        emit(committed.replace("\r", "\n"))
+                    }
                     return super.commitText(text, newCursorPosition)
                 }
 
                 override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
-                    val result = super.deleteSurroundingText(beforeLength, afterLength)
-                    if (result) {
-                        if (beforeLength > 0) repeat(beforeLength.coerceAtMost(32)) { emit("\b") }
-                        if (afterLength > 0) repeat(afterLength.coerceAtMost(32)) { emit("\u0000${HidKeyMapper.DELETE}") }
-                    }
-                    return result
+                    if (beforeLength > 0) repeat(beforeLength.coerceAtMost(32)) { emit("\b") }
+                    if (afterLength > 0) repeat(afterLength.coerceAtMost(32)) { emit("\u0000${HidKeyMapper.DELETE}") }
+                    return super.deleteSurroundingText(beforeLength, afterLength)
                 }
 
                 override fun deleteSurroundingTextInCodePoints(beforeLength: Int, afterLength: Int): Boolean {
-                    val result = super.deleteSurroundingTextInCodePoints(beforeLength, afterLength)
-                    if (result) {
-                        if (beforeLength > 0) repeat(beforeLength.coerceAtMost(32)) { emit("\b") }
-                        if (afterLength > 0) repeat(afterLength.coerceAtMost(32)) { emit("\u0000${HidKeyMapper.DELETE}") }
-                    }
-                    return result
+                    if (beforeLength > 0) repeat(beforeLength.coerceAtMost(32)) { emit("\b") }
+                    if (afterLength > 0) repeat(afterLength.coerceAtMost(32)) { emit("\u0000${HidKeyMapper.DELETE}") }
+                    return super.deleteSurroundingTextInCodePoints(beforeLength, afterLength)
                 }
 
                 override fun sendKeyEvent(event: KeyEvent): Boolean {
-                    val sentToLaptop = sendKeyEventToLaptop(event)
-                    val handledLocally = super.sendKeyEvent(event)
-                    return sentToLaptop || handledLocally
+                    val handled = sendKeyEventToLaptop(event)
+                    val local = super.sendKeyEvent(event)
+                    return handled || local
                 }
 
                 override fun performEditorAction(actionCode: Int): Boolean {
@@ -244,7 +224,6 @@ class MainActivity : Activity() {
                         actionCode == EditorInfo.IME_ACTION_SEARCH
                     ) {
                         sendKey(HidKeyMapper.ENTER)
-                        return super.performEditorAction(actionCode)
                     }
                     return super.performEditorAction(actionCode)
                 }
@@ -258,7 +237,7 @@ class MainActivity : Activity() {
 
         private fun sendKeyEventToLaptop(event: KeyEvent): Boolean {
             if (hid?.isConnected() != true) return false
-            return sendKeyEvent(event)
+            return this@MainActivity.sendKeyEvent(event)
         }
     }
 
