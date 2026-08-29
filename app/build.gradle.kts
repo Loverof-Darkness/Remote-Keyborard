@@ -21,14 +21,23 @@ android {
     }
 
     kotlinOptions { jvmTarget = "17" }
+    buildFeatures { buildConfig = false }
+
+    buildTypes {
+        debug {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
+        }
+        release {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
+        }
+    }
 }
 
 dependencies {
-    implementation("androidx.core:core-ktx:1.16.0")
-    implementation("androidx.appcompat:appcompat:1.7.0")
-    implementation("com.google.android.material:material:1.12.0")
-
-    // BluetoothHidDevice is a hidden/System API on the Android SDK surface.
-    // The reference project compiles against its stub and does not package it.
+    // BluetoothHidDevice is a hidden/System API; the local stub is compile-only.
     compileOnly(files("stubs/hidden-android.jar"))
 }
