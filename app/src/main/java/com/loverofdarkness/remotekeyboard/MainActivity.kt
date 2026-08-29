@@ -54,19 +54,8 @@ class MainActivity : Activity() {
             setPadding(28, 28, 28, 28)
             setBackgroundColor(Color.BLACK)
         }
-        root.addView(TextView(this).apply {
-            text = "Remote Keyboard"
-            textSize = 26f
-            setTextColor(Color.WHITE)
-            gravity = Gravity.CENTER
-        })
-        status = TextView(this).apply {
-            text = "● Disconnected"
-            textSize = 16f
-            setTextColor(0xFFFF5555.toInt())
-            gravity = Gravity.CENTER
-            setPadding(0, 20, 0, 20)
-        }
+        root.addView(TextView(this).apply { text = "Remote Keyboard"; textSize = 26f; setTextColor(Color.WHITE); gravity = Gravity.CENTER })
+        status = TextView(this).apply { text = "● Disconnected"; textSize = 16f; setTextColor(0xFFFF5555.toInt()); gravity = Gravity.CENTER; setPadding(0, 20, 0, 20) }
         root.addView(status)
         deviceSpinner = Spinner(this)
         root.addView(deviceSpinner)
@@ -75,7 +64,12 @@ class MainActivity : Activity() {
         root.addView(Button(this).apply { text = "Disconnect"; setOnClickListener { hid?.disconnect() } })
         root.addView(Button(this).apply {
             text = "Line Break ↵"
-            setOnClickListener { if (hid?.isConnected() == true) sendKey(HidKeyMapper.ENTER) }
+            setOnClickListener {
+                if (hid?.isConnected() == true) {
+                    // A line break in most desktop text editors/chat fields is Shift+Enter.
+                    sendKey(HidKeyMapper.ENTER, HidKeyMapper.MODIFIER_LEFT_SHIFT)
+                }
+            }
         })
         root.addView(Button(this).apply {
             text = "Clear Text"
@@ -162,7 +156,8 @@ class MainActivity : Activity() {
             KeyEvent.KEYCODE_BREAK -> HidKeyMapper.PAUSE
             else -> return false
         }
-        return sendKey(usage)
+        val modifier = if (event.isShiftPressed) HidKeyMapper.MODIFIER_LEFT_SHIFT else 0
+        return sendKey(usage, modifier)
     }
 
     override fun onDestroy() { hid?.close(); hid = null; super.onDestroy() }
@@ -187,7 +182,11 @@ class MainActivity : Activity() {
                 }
                 override fun sendKeyEvent(event: KeyEvent): Boolean {
                     val isShiftEnter = event.keyCode == KeyEvent.KEYCODE_ENTER && event.isShiftPressed
-                    if (isShiftEnter && event.action == KeyEvent.ACTION_DOWN) return super.sendKeyEvent(event)
+                    if (isShiftEnter && event.action == KeyEvent.ACTION_DOWN) {
+                        // Keep Shift+Enter as a real Shift+Enter locally; also forward it.
+                        sendKeyEventToLaptop(event)
+                        return super.sendKeyEvent(event)
+                    }
                     val handled = sendKeyEventToLaptop(event)
                     val local = super.sendKeyEvent(event)
                     return handled || local
