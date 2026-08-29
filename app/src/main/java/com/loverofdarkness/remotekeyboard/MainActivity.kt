@@ -3,7 +3,6 @@ package com.loverofdarkness.remotekeyboard
 import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
-import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.pm.PackageManager
@@ -28,13 +27,14 @@ class MainActivity : Activity() {
     private lateinit var keyboardPanel: LinearLayout
     private var paired: List<android.bluetooth.BluetoothDevice> = emptyList()
     private var hid: ClassicHid? = null
-    private val prefs by lazy { getSharedPreferences("custom_keys", MODE_PRIVATE) }
+    private val prefs by lazy { getSharedPreferences("remote_keyboard", MODE_PRIVATE) }
     private val repeatHandler = Handler(Looper.getMainLooper())
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.statusBarColor = Color.BLACK
         requestBluetoothPermissions()
+        requestNotificationPermission()
         buildUi()
     }
 
@@ -44,6 +44,10 @@ class MainActivity : Activity() {
             val missing = needed.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
             if (missing.isNotEmpty()) requestPermissions(missing.toTypedArray(), REQUEST_BLUETOOTH)
         }
+    }
+
+    private fun requestNotificationPermission() {
+        if (android.os.Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQUEST_NOTIFICATIONS)
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
@@ -57,6 +61,7 @@ class MainActivity : Activity() {
         status = TextView(this).apply { text="● Disconnected"; textSize=16f; setTextColor(0xFFFF5555.toInt()); gravity=Gravity.CENTER; setPadding(0,16,0,16) }
         root.addView(status)
         deviceSpinner=Spinner(this); root.addView(deviceSpinner)
+        root.addView(Button(this).apply { text="Quick Connect Last Device"; setOnClickListener{quickConnect()} })
         root.addView(Button(this).apply { text="Refresh Paired Devices"; setOnClickListener{loadPairedDevices()} })
         root.addView(Button(this).apply { text="Connect"; setOnClickListener{connectSelected()} })
         root.addView(Button(this).apply { text="Disconnect"; setOnClickListener{hid?.disconnect()} })
@@ -141,14 +146,16 @@ class MainActivity : Activity() {
         sendText(text)
     }
 
-    private fun loadPairedDevices(){val adapter=android.bluetooth.BluetoothAdapter.getDefaultAdapter()?:return;if(android.os.Build.VERSION.SDK_INT>=31&&checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT)!=PackageManager.PERMISSION_GRANTED)return;try{paired=adapter.bondedDevices.toList().sortedBy{it.name?:it.address};deviceSpinner.adapter=ArrayAdapter(this,android.R.layout.simple_spinner_dropdown_item,paired.map{"${it.name?:"Unknown"} • ${it.address}"});if(paired.isEmpty())status.text="● No paired Bluetooth devices"}catch(_:SecurityException){status.text="● Bluetooth permission required"}}
-    private fun connectSelected(){val device=paired.getOrNull(deviceSpinner.selectedItemPosition)?:return;if(hid==null){hid=ClassicHid.create(this){connected,name->runOnUiThread{status.text=if(connected)"● Connected: ${name?:"Laptop"}" else "● Disconnected";status.setTextColor(if(connected)0xFF55FF88.toInt() else 0xFFFF5555.toInt())}};hid?.start()};hid?.connect(device)}
+    private fun loadPairedDevices(){val adapter=android.bluetooth.BluetoothAdapter.getDefaultAdapter()?:return;if(android.os.Build.VERSION.SDK_INT>=31&&checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT)!=PackageManager.PERMISSION_GRANTED)return;try{paired=adapter.bondedDevices.toList().sortedBy{it.name?:it.address};val labels=paired.map{"${it.name?:"Unknown"} • ${it.address}"};deviceSpinner.adapter=ArrayAdapter(this,android.R.layout.simple_spinner_dropdown_item,labels);val last=prefs.getString("last_address",null);val index=paired.indexOfFirst{it.address==last};if(index>=0)deviceSpinner.setSelection(index);if(paired.isEmpty())status.text="● No paired Bluetooth devices"}catch(_:SecurityException){status.text="● Bluetooth permission required"}}
+    private fun quickConnect(){val last=prefs.getString("last_address",null);val device=paired.firstOrNull{it.address==last};if(device!=null)connectDevice(device)else status.text="● No remembered device"}
+    private fun connectSelected(){paired.getOrNull(deviceSpinner.selectedItemPosition)?.let(::connectDevice)}
+    private fun connectDevice(device:android.bluetooth.BluetoothDevice){prefs.edit().putString("last_address",device.address).apply();if(hid==null){hid=ClassicHid.create(this){connected,name->runOnUiThread{status.text=if(connected)"● Connected: ${name?:"Laptop"}" else "● Disconnected";status.setTextColor(if(connected)0xFF55FF88.toInt() else 0xFFFF5555.toInt());if(connected)ConnectionNotification.show(this,name?:"Laptop")else ConnectionNotification.clear(this)}};hid?.start()};hid?.connect(device)}
     private fun sendText(text:String){text.forEach{sendChar(it)}}
     private fun sendChar(c:Char):Boolean{val m=HidKeyMapper.map(c)?:return false;return sendKey(m.usage,m.modifier)}
     private fun sendKey(usage:Int,modifier:Int=0):Boolean{if(hid?.send(modifier,usage)!=true)return false;hid?.send(0,0);return true}
     private fun sendKeyEvent(event:KeyEvent):Boolean{if(event.action!=KeyEvent.ACTION_DOWN)return true;val usage=when(event.keyCode){KeyEvent.KEYCODE_DEL->HidKeyMapper.BACKSPACE;KeyEvent.KEYCODE_FORWARD_DEL->HidKeyMapper.DELETE;KeyEvent.KEYCODE_ENTER->HidKeyMapper.ENTER;KeyEvent.KEYCODE_TAB->HidKeyMapper.TAB;KeyEvent.KEYCODE_ESCAPE->HidKeyMapper.ESC;KeyEvent.KEYCODE_DPAD_RIGHT->HidKeyMapper.RIGHT;KeyEvent.KEYCODE_DPAD_LEFT->HidKeyMapper.LEFT;KeyEvent.KEYCODE_DPAD_DOWN->HidKeyMapper.DOWN;KeyEvent.KEYCODE_DPAD_UP->HidKeyMapper.UP;KeyEvent.KEYCODE_MOVE_HOME->HidKeyMapper.HOME;KeyEvent.KEYCODE_MOVE_END->HidKeyMapper.END;KeyEvent.KEYCODE_PAGE_UP->HidKeyMapper.PAGE_UP;KeyEvent.KEYCODE_PAGE_DOWN->HidKeyMapper.PAGE_DOWN;KeyEvent.KEYCODE_INSERT->HidKeyMapper.INSERT;KeyEvent.KEYCODE_CAPS_LOCK->HidKeyMapper.CAPS_LOCK;KeyEvent.KEYCODE_SYSRQ->HidKeyMapper.PRINT_SCREEN;KeyEvent.KEYCODE_SCROLL_LOCK->HidKeyMapper.SCROLL_LOCK;KeyEvent.KEYCODE_BREAK->HidKeyMapper.PAUSE;else->return false};return sendKey(usage,if(event.isShiftPressed)HidKeyMapper.MODIFIER_LEFT_SHIFT else 0)}
-    override fun onDestroy(){repeatHandler.removeCallbacksAndMessages(null);hid?.close();hid=null;super.onDestroy()}
+    override fun onDestroy(){repeatHandler.removeCallbacksAndMessages(null);ConnectionNotification.clear(this);hid?.close();hid=null;super.onDestroy()}
 
     private inner class RemoteEditText(context:Context,private val emit:(String)->Unit):EditText(context){override fun onCreateInputConnection(outAttrs:EditorInfo):InputConnection{val base=super.onCreateInputConnection(outAttrs);return object:InputConnectionWrapper(base,false){override fun commitText(text:CharSequence?,newCursorPosition:Int):Boolean{text?.toString()?.takeIf{it.isNotEmpty()}?.let{emit(it.replace("\r","\n"))};return super.commitText(text,newCursorPosition)};override fun deleteSurroundingText(beforeLength:Int,afterLength:Int):Boolean{if(beforeLength>0)repeat(beforeLength.coerceAtMost(32)){emit("\b")};if(afterLength>0)repeat(afterLength.coerceAtMost(32)){emit("\u0000${HidKeyMapper.DELETE}")};return super.deleteSurroundingText(beforeLength,afterLength)};override fun deleteSurroundingTextInCodePoints(beforeLength:Int,afterLength:Int):Boolean{if(beforeLength>0)repeat(beforeLength.coerceAtMost(32)){emit("\b")};if(afterLength>0)repeat(afterLength.coerceAtMost(32)){emit("\u0000${HidKeyMapper.DELETE}")};return super.deleteSurroundingTextInCodePoints(beforeLength,afterLength)};override fun sendKeyEvent(event:KeyEvent):Boolean{val handled=sendKeyEventToLaptop(event);val local=super.sendKeyEvent(event);return handled||local};override fun performEditorAction(actionCode:Int):Boolean{if(actionCode==EditorInfo.IME_ACTION_DONE||actionCode==EditorInfo.IME_ACTION_GO||actionCode==EditorInfo.IME_ACTION_NEXT||actionCode==EditorInfo.IME_ACTION_SEND||actionCode==EditorInfo.IME_ACTION_SEARCH)sendKey(HidKeyMapper.ENTER);return super.performEditorAction(actionCode)}}};private fun sendKeyEventToLaptop(event:KeyEvent):Boolean{if(hid?.isConnected()!=true)return false;return this@MainActivity.sendKeyEvent(event)}}
-    companion object{private const val REQUEST_BLUETOOTH=77}
+    companion object{private const val REQUEST_BLUETOOTH=77;private const val REQUEST_NOTIFICATIONS=78}
 }
