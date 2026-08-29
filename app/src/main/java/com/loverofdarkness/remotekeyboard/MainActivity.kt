@@ -91,7 +91,6 @@ class MainActivity : Activity() {
     private fun keyButton(text:String, action:()->Unit):Button {
         val button=Button(this).apply{this.text=text;setOnClickListener{if(hid?.isConnected()==true)action()}}
         var repeating=false
-        val stop=Runnable{repeating=false;repeatHandler.removeCallbacksAndMessages(button)}
         button.setOnLongClickListener {
             if(hid?.isConnected()!=true)return@setOnLongClickListener false
             repeating=true
@@ -100,10 +99,9 @@ class MainActivity : Activity() {
             true
         }
         button.setOnTouchListener { _, event ->
-            if(event.action==KeyEvent.ACTION_UP || event.action==KeyEvent.ACTION_CANCEL) { repeating=false;repeatHandler.removeCallbacksAndMessages(button) }
+            if(event.action==KeyEvent.ACTION_UP || event.action==android.view.MotionEvent.ACTION_CANCEL) { repeating=false;repeatHandler.removeCallbacksAndMessages(button) }
             false
         }
-        button.setTag(stop)
         return button
     }
 
