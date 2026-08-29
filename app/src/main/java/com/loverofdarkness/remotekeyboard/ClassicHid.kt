@@ -15,6 +15,7 @@ class ClassicHid private constructor(
     context: Context,
     private val onStateChanged: (Boolean, String?) -> Unit
 ) : BluetoothHidDevice.Callback() {
+    private val appContext = context.applicationContext
     private val adapter = BluetoothAdapter.getDefaultAdapter()
     private var hid: BluetoothHidDevice? = null
     private var host: BluetoothDevice? = null
@@ -40,7 +41,7 @@ class ClassicHid private constructor(
             onStateChanged(false, null)
             return
         }
-        adapter.getProfileProxy(context, profileListener, BluetoothProfile.HID_DEVICE)
+        adapter.getProfileProxy(appContext, profileListener, BluetoothProfile.HID_DEVICE)
     }
 
     private fun register() {
@@ -116,7 +117,7 @@ class ClassicHid private constructor(
         val h = hid ?: return false
         val d = host ?: return false
         return try {
-            h.sendReport(d, HidReports.REPORT_ID_KEYBOARD, ReportBuilder.keyboard(modifiers, usage))
+            h.sendReport(d, HidReports.REPORT_ID_KEYBOARD.toByte(), ReportBuilder.keyboard(modifiers, usage))
         } catch (_: Throwable) { false }
     }
 
