@@ -3,12 +3,10 @@ package com.loverofdarkness.remotekeyboard
 /** Minimal USB HID keyboard usage/modifier mapping. */
 object HidKeyMapper {
     data class Mapping(val usage: Int, val modifier: Int = 0)
-
     const val MODIFIER_LEFT_CTRL = 0x01
     const val MODIFIER_LEFT_SHIFT = 0x02
     const val MODIFIER_LEFT_ALT = 0x04
     const val MODIFIER_LEFT_META = 0x08
-
     const val BACKSPACE = 0x2A
     const val TAB = 0x2B
     const val ENTER = 0x28
@@ -49,28 +47,32 @@ object HidKeyMapper {
         return null
     }
 
-    fun usageFor(name: String): Int? = when (name.trim().uppercase()) {
-        "ENTER", "RETURN" -> ENTER
-        "BACKSPACE", "BKSP" -> BACKSPACE
-        "TAB" -> TAB
-        "ESC", "ESCAPE" -> ESC
-        "DELETE", "DEL" -> DELETE
-        "INSERT", "INS" -> INSERT
-        "UP" -> UP
-        "DOWN" -> DOWN
-        "LEFT" -> LEFT
-        "RIGHT" -> RIGHT
-        "HOME" -> HOME
-        "END" -> END
-        "PGUP", "PAGEUP", "PAGE UP" -> PAGE_UP
-        "PGDN", "PAGEDOWN", "PAGE DOWN" -> PAGE_DOWN
-        "CAPS", "CAPSLOCK", "CAPS LOCK" -> CAPS_LOCK
-        "PRINT", "PRINTSCREEN", "PRINT SCREEN" -> PRINT_SCREEN
-        "SCROLL", "SCROLLLOCK", "SCROLL LOCK" -> SCROLL_LOCK
-        "PAUSE" -> PAUSE
-        else -> {
-            val n = name.trim().uppercase().removePrefix("F").toIntOrNull()
-            if (name.trim().uppercase().startsWith("F") && n in 1..12) 0x39 + n else if (name.trim().length == 1) map(name.trim()[0])?.usage else null
+    fun usageFor(name: String): Int? {
+        val key = name.trim().uppercase()
+        return when (key) {
+            "ENTER", "RETURN" -> ENTER
+            "BACKSPACE", "BKSP" -> BACKSPACE
+            "TAB" -> TAB
+            "ESC", "ESCAPE" -> ESC
+            "DELETE", "DEL" -> DELETE
+            "INSERT", "INS" -> INSERT
+            "UP" -> UP
+            "DOWN" -> DOWN
+            "LEFT" -> LEFT
+            "RIGHT" -> RIGHT
+            "HOME" -> HOME
+            "END" -> END
+            "PGUP", "PAGEUP", "PAGE UP" -> PAGE_UP
+            "PGDN", "PAGEDOWN", "PAGE DOWN" -> PAGE_DOWN
+            "CAPS", "CAPSLOCK", "CAPS LOCK" -> CAPS_LOCK
+            "PRINT", "PRINTSCREEN", "PRINT SCREEN" -> PRINT_SCREEN
+            "SCROLL", "SCROLLLOCK", "SCROLL LOCK" -> SCROLL_LOCK
+            "PAUSE" -> PAUSE
+            else -> {
+                val n = key.removePrefix("F").toIntOrNull()
+                if (key.startsWith("F") && n != null && n in 1..12) 0x39 + n
+                else if (key.length == 1) map(key[0])?.usage else null
+            }
         }
     }
 
