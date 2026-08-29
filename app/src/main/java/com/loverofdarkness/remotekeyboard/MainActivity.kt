@@ -72,25 +72,12 @@ class MainActivity : Activity() {
         root.addView(status)
         deviceSpinner = Spinner(this)
         root.addView(deviceSpinner)
-        root.addView(Button(this).apply {
-            text = "Refresh Paired Devices"
-            setOnClickListener { loadPairedDevices() }
-        })
-        root.addView(Button(this).apply {
-            text = "Connect"
-            setOnClickListener { connectSelected() }
-        })
-        root.addView(Button(this).apply {
-            text = "Disconnect"
-            setOnClickListener { hid?.disconnect() }
-        })
+        root.addView(Button(this).apply { text = "Refresh Paired Devices"; setOnClickListener { loadPairedDevices() } })
+        root.addView(Button(this).apply { text = "Connect"; setOnClickListener { connectSelected() } })
+        root.addView(Button(this).apply { text = "Disconnect"; setOnClickListener { hid?.disconnect() } })
         root.addView(Button(this).apply {
             text = "Clear Text"
-            setOnClickListener {
-                typeField.setText("")
-                typeField.setSelection(0)
-                typeField.requestFocus()
-            }
+            setOnClickListener { typeField.setText(""); typeField.setSelection(0); typeField.requestFocus() }
         })
 
         typeField = RemoteEditText(this) { token ->
@@ -142,35 +129,8 @@ class MainActivity : Activity() {
         hid?.connect(device)
     }
 
-    private fun sendText(text: String) {
-        text.forEach { c ->
-            if (c == '\n' || c == '\r') sendKey(HidKeyMapper.ENTER)
-            else sendChar(c)
-        }
-    }
-
-    private fun sendChar(c: Char): Boolean {
-        val mapping = HidKeyMapper.map(c)
-        if (mapping != null) return sendKey(mapping.usage, mapping.modifier)
-        return sendUnicodeCodePoint(c.code)
-    }
-
-    /**
-     * Garuda/Linux desktop Unicode input: Ctrl+Shift+U, hexadecimal code point, Enter.
-     * This lets native Android keyboards send emoji and other Unicode characters even
-     * though the standard boot-keyboard HID report itself has no Unicode text packet.
-     */
-    private fun sendUnicodeCodePoint(codePoint: Int): Boolean {
-        if (codePoint <= 0 || codePoint > 0x10FFFF) return false
-        val hex = codePoint.toString(16)
-        if (!sendKey(0x03, 0x03)) return false // Ctrl+Shift+U
-        hex.forEach { digit ->
-            val mapping = HidKeyMapper.map(digit) ?: return false
-            if (!sendKey(mapping.usage, mapping.modifier)) return false
-        }
-        return sendKey(HidKeyMapper.ENTER)
-    }
-
+    private fun sendText(text: String) { text.forEach { sendChar(it) } }
+    private fun sendChar(c: Char): Boolean { val mapping = HidKeyMapper.map(c) ?: return false; return sendKey(mapping.usage, mapping.modifier) }
     private fun sendKey(usage: Int, modifier: Int = 0): Boolean {
         if (hid?.send(modifier, usage) != true) return false
         hid?.send(0, 0)
@@ -203,35 +163,26 @@ class MainActivity : Activity() {
         return sendKey(usage)
     }
 
-    override fun onDestroy() {
-        hid?.close()
-        hid = null
-        super.onDestroy()
-    }
+    override fun onDestroy() { hid?.close(); hid = null; super.onDestroy() }
 
     private inner class RemoteEditText(context: Context, private val emit: (String) -> Unit) : EditText(context) {
         override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection {
             val base = super.onCreateInputConnection(outAttrs)
             return object : InputConnectionWrapper(base, false) {
                 override fun commitText(text: CharSequence?, newCursorPosition: Int): Boolean {
-                    text?.toString()?.takeIf { it.isNotEmpty() }?.let { committed ->
-                        emit(committed.replace("\r", "\n"))
-                    }
+                    text?.toString()?.takeIf { it.isNotEmpty() }?.let { committed -> emit(committed.replace("\r", "\n")) }
                     return super.commitText(text, newCursorPosition)
                 }
-
                 override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
                     if (beforeLength > 0) repeat(beforeLength.coerceAtMost(32)) { emit("\b") }
                     if (afterLength > 0) repeat(afterLength.coerceAtMost(32)) { emit("\u0000${HidKeyMapper.DELETE}") }
                     return super.deleteSurroundingText(beforeLength, afterLength)
                 }
-
                 override fun deleteSurroundingTextInCodePoints(beforeLength: Int, afterLength: Int): Boolean {
                     if (beforeLength > 0) repeat(beforeLength.coerceAtMost(32)) { emit("\b") }
                     if (afterLength > 0) repeat(afterLength.coerceAtMost(32)) { emit("\u0000${HidKeyMapper.DELETE}") }
                     return super.deleteSurroundingTextInCodePoints(beforeLength, afterLength)
                 }
-
                 override fun sendKeyEvent(event: KeyEvent): Boolean {
                     val isShiftEnter = event.keyCode == KeyEvent.KEYCODE_ENTER && event.isShiftPressed
                     if (isShiftEnter && event.action == KeyEvent.ACTION_DOWN) return super.sendKeyEvent(event)
@@ -239,29 +190,20 @@ class MainActivity : Activity() {
                     val local = super.sendKeyEvent(event)
                     return handled || local
                 }
-
                 override fun performEditorAction(actionCode: Int): Boolean {
-                    if (actionCode == EditorInfo.IME_ACTION_DONE ||
-                        actionCode == EditorInfo.IME_ACTION_GO ||
-                        actionCode == EditorInfo.IME_ACTION_NEXT ||
-                        actionCode == EditorInfo.IME_ACTION_SEND ||
-                        actionCode == EditorInfo.IME_ACTION_SEARCH
-                    ) sendKey(HidKeyMapper.ENTER)
+                    if (actionCode == EditorInfo.IME_ACTION_DONE || actionCode == EditorInfo.IME_ACTION_GO || actionCode == EditorInfo.IME_ACTION_NEXT || actionCode == EditorInfo.IME_ACTION_SEND || actionCode == EditorInfo.IME_ACTION_SEARCH) sendKey(HidKeyMapper.ENTER)
                     return super.performEditorAction(actionCode)
                 }
-
                 override fun commitCompletion(text: android.view.inputmethod.CompletionInfo?): Boolean {
                     text?.text?.toString()?.takeIf { it.isNotEmpty() }?.let(emit)
                     return super.commitCompletion(text)
                 }
             }
         }
-
         private fun sendKeyEventToLaptop(event: KeyEvent): Boolean {
             if (hid?.isConnected() != true) return false
             return this@MainActivity.sendKeyEvent(event)
         }
     }
-
     companion object { private const val REQUEST_BLUETOOTH = 77 }
 }
