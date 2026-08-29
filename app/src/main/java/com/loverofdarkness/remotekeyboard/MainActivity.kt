@@ -155,7 +155,6 @@ class MainActivity : Activity() {
         hid?.connect(device)
     }
 
-    /** Send each committed text character as a real HID press/release. */
     private fun sendText(text: String) {
         text.forEach { sendChar(it) }
     }
@@ -165,7 +164,6 @@ class MainActivity : Activity() {
         return sendKey(mapping.usage, mapping.modifier)
     }
 
-    /** HID press followed by release. */
     private fun sendKey(usage: Int, modifier: Int = 0): Boolean {
         if (hid?.send(modifier, usage) != true) return false
         hid?.send(0, 0)
@@ -215,24 +213,30 @@ class MainActivity : Activity() {
                 }
 
                 override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
-                    if (beforeLength > 0) repeat(beforeLength.coerceAtMost(32)) { emit("\b") }
-                    if (afterLength > 0) repeat(afterLength.coerceAtMost(32)) { emit("\u0000${HidKeyMapper.DELETE}") }
-                    return super.deleteSurroundingText(beforeLength, afterLength)
+                    val result = super.deleteSurroundingText(beforeLength, afterLength)
+                    if (result) {
+                        if (beforeLength > 0) repeat(beforeLength.coerceAtMost(32)) { emit("\b") }
+                        if (afterLength > 0) repeat(afterLength.coerceAtMost(32)) { emit("\u0000${HidKeyMapper.DELETE}") }
+                    }
+                    return result
                 }
 
                 override fun deleteSurroundingTextInCodePoints(beforeLength: Int, afterLength: Int): Boolean {
-                    if (beforeLength > 0) repeat(beforeLength.coerceAtMost(32)) { emit("\b") }
-                    if (afterLength > 0) repeat(afterLength.coerceAtMost(32)) { emit("\u0000${HidKeyMapper.DELETE}") }
-                    return super.deleteSurroundingTextInCodePoints(beforeLength, afterLength)
+                    val result = super.deleteSurroundingTextInCodePoints(beforeLength, afterLength)
+                    if (result) {
+                        if (beforeLength > 0) repeat(beforeLength.coerceAtMost(32)) { emit("\b") }
+                        if (afterLength > 0) repeat(afterLength.coerceAtMost(32)) { emit("\u0000${HidKeyMapper.DELETE}") }
+                    }
+                    return result
                 }
 
                 override fun sendKeyEvent(event: KeyEvent): Boolean {
-                    if (sendKeyEventToLaptop(event)) return true
-                    return super.sendKeyEvent(event)
+                    val sentToLaptop = sendKeyEventToLaptop(event)
+                    val handledLocally = super.sendKeyEvent(event)
+                    return sentToLaptop || handledLocally
                 }
 
                 override fun performEditorAction(actionCode: Int): Boolean {
-                    // IMEs commonly use editor actions instead of KEYCODE_ENTER.
                     if (actionCode == EditorInfo.IME_ACTION_DONE ||
                         actionCode == EditorInfo.IME_ACTION_GO ||
                         actionCode == EditorInfo.IME_ACTION_NEXT ||
@@ -240,7 +244,7 @@ class MainActivity : Activity() {
                         actionCode == EditorInfo.IME_ACTION_SEARCH
                     ) {
                         sendKey(HidKeyMapper.ENTER)
-                        return true
+                        return super.performEditorAction(actionCode)
                     }
                     return super.performEditorAction(actionCode)
                 }
