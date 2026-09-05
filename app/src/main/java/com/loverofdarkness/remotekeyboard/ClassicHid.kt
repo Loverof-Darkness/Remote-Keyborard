@@ -39,9 +39,9 @@ class ClassicHid private constructor(
         }
     }
 
-    override fun onAppStatusChanged(pluggedDevice: BluetoothDevice?, registered: Boolean) {
-        this.registered = registered
-        if (!registered) {
+    override fun onAppStatusChanged(pluggedDevice: BluetoothDevice?, isRegistered: Boolean) {
+        registered = isRegistered
+        if (!isRegistered) {
             host = null
             onStateChanged(false, null)
             return
