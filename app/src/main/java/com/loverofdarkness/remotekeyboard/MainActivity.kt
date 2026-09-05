@@ -136,11 +136,7 @@ class MainActivity : Activity() {
                 checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED &&
                 checkSelfPermission(Manifest.permission.BLUETOOTH_ADVERTISE) == PackageManager.PERMISSION_GRANTED
         )
-        if (!bluetoothGranted) {
-            status.text = "Nearby devices permissions are required"
-            return
-        }
-        startBluetooth()
+        if (bluetoothGranted) startBluetooth() else status.text = "Nearby devices permissions are required"
     }
 
     private fun startBluetooth() {
@@ -150,6 +146,13 @@ class MainActivity : Activity() {
         if (hid == null) {
             hid = ClassicHid.create(this) { connected, name ->
                 runOnUiThread {
+                    if (connected) {
+                        connectionEpoch.incrementAndGet()
+                        clearLocalBuffer()
+                    } else {
+                        connectionEpoch.incrementAndGet()
+                        clearLocalBuffer()
+                    }
                     editor.isEnabled = connected
                     sendButton.isEnabled = connected && !liveSwitch.isChecked
                     status.setTextColor(if (connected) 0xFF55FF88.toInt() else 0xFFFFAA55.toInt())
@@ -180,38 +183,25 @@ class MainActivity : Activity() {
         if (Build.VERSION.SDK_INT >= 31 && checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) { requestBluetoothPermissions(); return }
         try {
             if (a.isDiscovering) a.cancelDiscovery()
-            loadKnownDevices()
-            searchButton.isEnabled = false
-            searchButton.text = "Searching…"
-            status.text = "Searching nearby Bluetooth devices…"
-            a.startDiscovery()
-        } catch (t: Throwable) {
-            searchButton.isEnabled = true
-            searchButton.text = "Search Bluetooth devices"
-            status.text = "Bluetooth search failed: ${t.javaClass.simpleName}"
-        }
+            loadKnownDevices(); searchButton.isEnabled = false; searchButton.text = "Searching…"; status.text = "Searching nearby Bluetooth devices…"; a.startDiscovery()
+        } catch (t: Throwable) { searchButton.isEnabled = true; searchButton.text = "Search Bluetooth devices"; status.text = "Bluetooth search failed: ${t.javaClass.simpleName}" }
     }
 
     private fun refreshDeviceList() {
         if (!::deviceSpinner.isInitialized) return
         val list = devices.values.sortedWith(compareByDescending<BluetoothDevice> { it.bondState == BluetoothDevice.BOND_BONDED }.thenBy { safeName(it) })
         val labels = list.map { d -> "${safeName(d)} • ${if (d.bondState == BluetoothDevice.BOND_BONDED) "Paired" else "Not paired"}" }
-        deviceSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, labels)
-        deviceSpinner.tag = list
+        deviceSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, labels); deviceSpinner.tag = list
     }
 
     @Suppress("UNCHECKED_CAST")
     private fun connectSelected() {
         val list = deviceSpinner.tag as? List<BluetoothDevice> ?: emptyList()
         val device = list.getOrNull(deviceSpinner.selectedItemPosition) ?: run { status.text = "Select a Bluetooth device first"; return }
-        if (device.bondState != BluetoothDevice.BOND_BONDED) {
-            status.text = "Pair this device first"
-            try { device.createBond() } catch (t: Throwable) { status.text = "Pairing failed: ${t.javaClass.simpleName}" }
-            return
-        }
+        if (device.bondState != BluetoothDevice.BOND_BONDED) { status.text = "Pair this device first"; try { device.createBond() } catch (t: Throwable) { status.text = "Pairing failed: ${t.javaClass.simpleName}" }; return }
         if (hid == null) startBluetooth()
-        status.text = "Connecting to ${safeName(device)}…"
-        hid?.connect(device)
+        connectionEpoch.incrementAndGet()
+        status.text = "Connecting to ${safeName(device)}…"; hid?.connect(device)
     }
 
     private fun sendBufferedText() {
@@ -253,23 +243,19 @@ class MainActivity : Activity() {
 
     private fun addKeyRow(parent: LinearLayout, keys: List<Pair<String, Int>>) {
         val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        keys.forEach { (label, usage) ->
-            row.addView(Button(this).apply { text = label; setOnClickListener { if (queueStrokes(listOf(Stroke(0, usage)))) clearLocalBuffer() } }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        }
+        keys.forEach { (label, usage) -> row.addView(Button(this).apply { text = label; setOnClickListener { if (queueStrokes(listOf(Stroke(0, usage)))) clearLocalBuffer() } }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)) }
         parent.addView(row)
     }
 
     private fun addButton(parent: LinearLayout, label: String, action: () -> Unit): Button {
         val button = Button(this).apply { text = label; setOnClickListener { action() } }
-        parent.addView(button)
-        return button
+        parent.addView(button); return button
     }
 
     private fun safeName(device: BluetoothDevice): String = try { device.name?.takeIf { it.isNotBlank() } ?: device.address } catch (_: Throwable) { "Bluetooth device" }
 
     override fun onStart() {
-        super.onStart()
-        if (receiverRegistered) return
+        super.onStart(); if (receiverRegistered) return
         val filter = IntentFilter().apply { addAction(BluetoothDevice.ACTION_FOUND); addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED); addAction(BluetoothDevice.ACTION_BOND_STATE_CHANGED) }
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(receiver, filter, RECEIVER_NOT_EXPORTED) else @Suppress("DEPRECATION") registerReceiver(receiver, filter)
         receiverRegistered = true
@@ -282,10 +268,8 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
-        connectionEpoch.incrementAndGet(); sender.shutdownNow()
-        try { adapter?.cancelDiscovery() } catch (_: Throwable) {}
-        hid?.close(); hid = null; ConnectionNotification.clear(this)
-        super.onDestroy()
+        connectionEpoch.incrementAndGet(); sender.shutdownNow(); try { adapter?.cancelDiscovery() } catch (_: Throwable) {}
+        hid?.close(); hid = null; ConnectionNotification.clear(this); super.onDestroy()
     }
 
     @Suppress("DEPRECATION")
