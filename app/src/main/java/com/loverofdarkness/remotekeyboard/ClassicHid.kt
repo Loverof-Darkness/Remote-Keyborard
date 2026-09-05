@@ -23,18 +23,17 @@ class ClassicHid private constructor(
 
     private val serviceListener = object : BluetoothProfile.ServiceListener {
         override fun onServiceConnected(profile: Int, proxy: BluetoothProfile) {
-            if (profile == BluetoothProfile.HID_DEVICE && proxy is BluetoothHidDevice) {
-                device = proxy
-                registerApp()
-            }
+            if (profile != BluetoothProfile.HID_DEVICE || proxy !is BluetoothHidDevice) return
+            device = proxy
+            registerApp()
         }
+
         override fun onServiceDisconnected(profile: Int) {
-            if (profile == BluetoothProfile.HID_DEVICE) {
-                registered = false
-                device = null
-                host = null
-                onStateChanged(false, null)
-            }
+            if (profile != BluetoothProfile.HID_DEVICE) return
+            registered = false
+            device = null
+            host = null
+            onStateChanged(false, null)
         }
     }
 
@@ -45,6 +44,7 @@ class ClassicHid private constructor(
             onStateChanged(false, null)
             return
         }
+
         if (pluggedDevice != null) {
             host = pluggedDevice
             lastHost = pluggedDevice
