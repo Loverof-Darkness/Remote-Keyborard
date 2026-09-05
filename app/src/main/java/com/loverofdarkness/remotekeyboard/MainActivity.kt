@@ -52,7 +52,7 @@ class MainActivity : Activity() {
         override fun onReceive(context: Context, intent: Intent) {
             when (intent.action) {
                 BluetoothDevice.ACTION_FOUND -> {
-                    val device = intent.getParcelableExtraCompat<BluetoothDevice>(BluetoothDevice.EXTRA_DEVICE) ?: return
+                    val device = intent.getParcelableExtraCompat() ?: return
                     devices[device.address] = device
                     refreshDeviceList()
                 }
@@ -62,12 +62,10 @@ class MainActivity : Activity() {
                     status.text = if (devices.isEmpty()) "No Bluetooth devices found" else "Select a paired laptop and connect"
                 }
                 BluetoothDevice.ACTION_BOND_STATE_CHANGED -> {
-                    val device = intent.getParcelableExtraCompat<BluetoothDevice>(BluetoothDevice.EXTRA_DEVICE) ?: return
+                    val device = intent.getParcelableExtraCompat() ?: return
                     devices[device.address] = device
                     refreshDeviceList()
-                    if (device.bondState == BluetoothDevice.BOND_BONDED) {
-                        status.text = "Paired — ready to connect"
-                    }
+                    if (device.bondState == BluetoothDevice.BOND_BONDED) status.text = "Paired — ready to connect"
                 }
             }
         }
@@ -106,6 +104,7 @@ class MainActivity : Activity() {
         root.addView(deviceSpinner)
 
         searchButton = addButton(root, "Search Bluetooth devices") { startSearch() }
+        addButton(root, "Make phone discoverable") { makeDiscoverable() }
         addButton(root, "Connect selected") { connectSelected() }
         addButton(root, "Disconnect") { hid?.disconnect() }
 
@@ -168,7 +167,7 @@ class MainActivity : Activity() {
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
 
             override fun afterTextChanged(s: Editable?) {
-                if (suppressChanges || !liveSwitch.isChecked || hid?.isConnected() != true) return
+                if (suppressChanges || !liveSwitch.isChecked || !hid?.isConnected().orFalse()) return
                 val next = s?.toString().orEmpty()
                 if (!isSupported(next)) {
                     restorePreviousText()
@@ -190,11 +189,10 @@ class MainActivity : Activity() {
             }
         })
 
-        val scroll = ScrollView(this).apply {
+        setContentView(ScrollView(this).apply {
             isFillViewport = true
             addView(root)
-        }
-        setContentView(scroll)
+        })
     }
 
     private fun requestBluetoothPermissions() {
@@ -245,6 +243,18 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun makeDiscoverable() {
+        if (Build.VERSION.SDK_INT >= 31 && checkSelfPermission(Manifest.permission.BLUETOOTH_ADVERTISE) != PackageManager.PERMISSION_GRANTED) {
+            requestBluetoothPermissions()
+            return
+        }
+        startActivity(
+            Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE).apply {
+                putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 300)
+            }
+        )
+    }
+
     private fun loadKnownDevices() {
         val a = adapter ?: return
         if (Build.VERSION.SDK_INT >= 31 && checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) return
@@ -252,7 +262,7 @@ class MainActivity : Activity() {
             devices.clear()
             a.bondedDevices.forEach { devices[it.address] = it }
             refreshDeviceList()
-            if (devices.isEmpty()) status.text = "No paired devices — tap Search to discover"
+            if (devices.isEmpty()) status.text = "No paired devices — make the phone discoverable and pair from laptop"
         } catch (_: SecurityException) {
             status.text = "Bluetooth permission required"
         }
@@ -301,11 +311,8 @@ class MainActivity : Activity() {
         }
         if (device.bondState != BluetoothDevice.BOND_BONDED) {
             status.text = "Pair this device first"
-            try {
-                device.createBond()
-            } catch (t: Throwable) {
-                status.text = "Pairing failed: ${t.javaClass.simpleName}"
-            }
+            try { device.createBond() }
+            catch (t: Throwable) { status.text = "Pairing failed: ${t.javaClass.simpleName}" }
             return
         }
         if (hid == null) startBluetooth()
@@ -325,9 +332,11 @@ class MainActivity : Activity() {
 
     private fun queueStrokes(strokes: List<Stroke>): Boolean {
         if (strokes.isEmpty()) return true
-        val service = hid
-        val device = currentHost()
-        if (service == null || device == null) {
+        val service = hid ?: run {
+            status.text = "Connect a laptop first"
+            return false
+        }
+        if (!service.isConnected()) {
             status.text = "Connect a laptop first"
             return false
         }
@@ -357,18 +366,6 @@ class MainActivity : Activity() {
         return true
     }
 
-    private fun currentHost(): BluetoothDevice? = hidHostField()
-
-    private fun hidHostField(): BluetoothDevice? {
-        return try {
-            val field = ClassicHid::class.java.getDeclaredField("host")
-            field.isAccessible = true
-            field.get(hid) as? BluetoothDevice
-        } catch (_: Throwable) {
-            null
-        }
-    }
-
     private fun clearLocalBuffer() {
         suppressChanges = true
         editor.setText("")
@@ -385,10 +382,10 @@ class MainActivity : Activity() {
 
     private fun isSupported(text: String): Boolean = text.all { strokeFor(it) != null }
 
-    private fun strokeFor(c: Char): Stroke? {
-        if (c == '\n') return Stroke(0, HidKeyMapper.ENTER)
-        if (c == '\t') return Stroke(0, HidKeyMapper.TAB)
-        return HidKeyMapper.map(c)?.let { Stroke(it.modifier, it.usage) }
+    private fun strokeFor(c: Char): Stroke? = when (c) {
+        '\n' -> Stroke(0, HidKeyMapper.ENTER)
+        '\t' -> Stroke(0, HidKeyMapper.TAB)
+        else -> HidKeyMapper.map(c)?.let { Stroke(it.modifier, it.usage) }
     }
 
     private fun addKeyRow(parent: LinearLayout, keys: List<Pair<String, Int>>) {
@@ -416,25 +413,19 @@ class MainActivity : Activity() {
 
     private fun safeName(device: BluetoothDevice): String = try {
         device.name?.takeIf { it.isNotBlank() } ?: device.address
-    } catch (_: Throwable) {
-        "Bluetooth device"
-    }
+    } catch (_: Throwable) { "Bluetooth device" }
 
     override fun onStart() {
         super.onStart()
-        if (!receiverRegistered) {
-            val filter = IntentFilter().apply {
-                addAction(BluetoothDevice.ACTION_FOUND)
-                addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED)
-                addAction(BluetoothDevice.ACTION_BOND_STATE_CHANGED)
-            }
-            if (Build.VERSION.SDK_INT >= 33) {
-                registerReceiver(receiver, filter, RECEIVER_NOT_EXPORTED)
-            } else {
-                @Suppress("DEPRECATION") registerReceiver(receiver, filter)
-            }
-            receiverRegistered = true
+        if (receiverRegistered) return
+        val filter = IntentFilter().apply {
+            addAction(BluetoothDevice.ACTION_FOUND)
+            addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED)
+            addAction(BluetoothDevice.ACTION_BOND_STATE_CHANGED)
         }
+        if (Build.VERSION.SDK_INT >= 33) registerReceiver(receiver, filter, RECEIVER_NOT_EXPORTED)
+        else @Suppress("DEPRECATION") registerReceiver(receiver, filter)
+        receiverRegistered = true
     }
 
     override fun onStop() {
@@ -456,9 +447,14 @@ class MainActivity : Activity() {
         super.onDestroy()
     }
 
+    @Suppress("DEPRECATION")
     private fun Intent.getParcelableExtraCompat(): BluetoothDevice? =
         if (Build.VERSION.SDK_INT >= 33) getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
-        else @Suppress("DEPRECATION") getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+        else getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+
+    private fun Boolean?.orFalse(): Boolean = this == true
+
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
     companion object {
         private const val REQUEST_BLUETOOTH = 77
