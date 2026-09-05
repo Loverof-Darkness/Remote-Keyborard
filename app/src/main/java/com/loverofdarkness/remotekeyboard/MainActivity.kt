@@ -88,10 +88,7 @@ class MainActivity : Activity() {
         addButton(root, "Disconnect") { hid?.disconnect() }
         liveSwitch = Switch(this).apply { text = "Live typing"; setTextColor(Color.WHITE); isChecked = true }
         root.addView(liveSwitch)
-        root.addView(TextView(this).apply {
-            text = "Live mirrors the current buffer. After moving the laptop cursor, tap New buffer. Buffered mode lets you compose first, then Send. US-layout ASCII only."
-            textSize = 13f; setTextColor(0xFFBBBBBB.toInt()); setPadding(0, dp(4), 0, dp(8))
-        })
+        root.addView(TextView(this).apply { text = "Live mirrors the current buffer. After moving the laptop cursor, tap New buffer. Buffered mode lets you compose first, then Send. US-layout ASCII only."; textSize = 13f; setTextColor(0xFFBBBBBB.toInt()); setPadding(0, dp(4), 0, dp(8)) })
         editor = EditText(this).apply {
             hint = "Tap here to open your native keyboard"; textSize = 18f; minLines = 5; gravity = Gravity.TOP or Gravity.START
             setTextColor(Color.WHITE); setHintTextColor(0xFF888888.toInt()); setPadding(dp(16), dp(16), dp(16), dp(16)); setBackgroundColor(0xFF181818.toInt())
@@ -134,11 +131,7 @@ class MainActivity : Activity() {
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode != REQUEST_BLUETOOTH) return
-        val bluetoothOk = if (Build.VERSION.SDK_INT >= 31) {
-            checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED &&
-                checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED &&
-                checkSelfPermission(Manifest.permission.BLUETOOTH_ADVERTISE) == PackageManager.PERMISSION_GRANTED
-        } else true
+        val bluetoothOk = if (Build.VERSION.SDK_INT >= 31) checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED && checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED && checkSelfPermission(Manifest.permission.BLUETOOTH_ADVERTISE) == PackageManager.PERMISSION_GRANTED else true
         if (bluetoothOk) startBluetooth() else status.text = "Nearby devices permissions are required"
     }
 
@@ -149,8 +142,7 @@ class MainActivity : Activity() {
         if (hid == null) {
             hid = ClassicHid.create(this) { connected, name ->
                 runOnUiThread {
-                    editor.isEnabled = connected
-                    sendButton.isEnabled = connected && !liveSwitch.isChecked
+                    editor.isEnabled = connected; sendButton.isEnabled = connected && !liveSwitch.isChecked
                     status.setTextColor(if (connected) 0xFF55FF88.toInt() else 0xFFFFAA55.toInt())
                     status.text = if (connected) "Connected: ${name ?: "Bluetooth host"}" else "Disconnected"
                     if (connected) ConnectionNotification.show(this, name ?: "Bluetooth host") else ConnectionNotification.clear(this)
