@@ -36,7 +36,6 @@ class MainActivity : Activity() {
     private lateinit var liveSwitch: Switch
     private lateinit var sendButton: Button
     private lateinit var searchButton: Button
-
     private var devices = linkedMapOf<String, BluetoothDevice>()
     private var hid: ClassicHid? = null
     private val adapter: BluetoothAdapter? by lazy { BluetoothAdapter.getDefaultAdapter() }
@@ -45,7 +44,6 @@ class MainActivity : Activity() {
     private var previousText = ""
     private var suppressChanges = false
     private var receiverRegistered = false
-
     private data class Stroke(val modifier: Int, val usage: Int)
 
     private val receiver = object : BroadcastReceiver() {
@@ -78,11 +76,7 @@ class MainActivity : Activity() {
     }
 
     private fun buildUi() {
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(16), dp(12), dp(16), dp(12))
-            setBackgroundColor(Color.BLACK)
-        }
+        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(12), dp(16), dp(12)); setBackgroundColor(Color.BLACK) }
         root.addView(TextView(this).apply { text = "Remote Keyboard"; textSize = 26f; setTextColor(Color.WHITE); gravity = Gravity.CENTER })
         status = TextView(this).apply { text = "Preparing Bluetooth…"; textSize = 15f; setTextColor(0xFFFFAA55.toInt()); gravity = Gravity.CENTER; setPadding(0, dp(12), 0, dp(12)) }
         root.addView(status)
@@ -147,7 +141,11 @@ class MainActivity : Activity() {
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode != REQUEST_BLUETOOTH) return
-        val bluetoothGranted = Build.VERSION.SDK_INT < 31 || (checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED && checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED && checkSelfPermission(Manifest.permission.BLUETOOTH_ADVERTISE) == PackageManager.PERMISSION_GRANTED)
+        val bluetoothGranted = Build.VERSION.SDK_INT < 31 || (
+            checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED &&
+                checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED &&
+                checkSelfPermission(Manifest.permission.BLUETOOTH_ADVERTISE) == PackageManager.PERMISSION_GRANTED
+        )
         if (bluetoothGranted) startBluetooth() else status.text = "Nearby devices permissions are required"
     }
 
@@ -221,6 +219,7 @@ class MainActivity : Activity() {
         }
         if (hid == null) startBluetooth()
         connectionEpoch.incrementAndGet()
+        clearLocalBuffer()
         status.text = "Connecting to ${safeName(device)}…"
         hid?.connect(device)
     }
