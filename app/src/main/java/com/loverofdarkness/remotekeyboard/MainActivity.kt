@@ -18,14 +18,7 @@ import android.text.TextWatcher
 import android.view.Gravity
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
-import android.widget.ArrayAdapter
-import android.widget.Button
-import android.widget.EditText
-import android.widget.LinearLayout
-import android.widget.ScrollView
-import android.widget.Spinner
-import android.widget.Switch
-import android.widget.TextView
+import android.widget.*
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -103,7 +96,6 @@ class MainActivity : Activity() {
         addButton(root, "Make phone discoverable") { makeDiscoverable() }
         addButton(root, "Connect selected") { connectSelected() }
         addButton(root, "Disconnect") { hid?.disconnect() }
-
         liveSwitch = Switch(this).apply {
             text = "Live typing"
             setTextColor(Color.WHITE)
@@ -135,18 +127,8 @@ class MainActivity : Activity() {
         sendButton = addButton(root, "Send buffered text") { sendBufferedText() }
         sendButton.isEnabled = false
         addButton(root, "New buffer") { clearLocalBuffer() }
-        addKeyRow(root, listOf(
-            "Enter" to HidKeyMapper.ENTER,
-            "Backspace" to HidKeyMapper.BACKSPACE,
-            "Tab" to HidKeyMapper.TAB,
-            "Esc" to HidKeyMapper.ESC
-        ))
-        addKeyRow(root, listOf(
-            "←" to HidKeyMapper.LEFT,
-            "↑" to HidKeyMapper.UP,
-            "↓" to HidKeyMapper.DOWN,
-            "→" to HidKeyMapper.RIGHT
-        ))
+        addKeyRow(root, listOf("Enter" to HidKeyMapper.ENTER, "Backspace" to HidKeyMapper.BACKSPACE, "Tab" to HidKeyMapper.TAB, "Esc" to HidKeyMapper.ESC))
+        addKeyRow(root, listOf("←" to HidKeyMapper.LEFT, "↑" to HidKeyMapper.UP, "↓" to HidKeyMapper.DOWN, "→" to HidKeyMapper.RIGHT))
 
         liveSwitch.setOnCheckedChangeListener { _, checked ->
             clearLocalBuffer()
@@ -224,8 +206,12 @@ class MainActivity : Activity() {
     }
 
     private fun makeDiscoverable() {
-        if (Build.VERSION.SDK_INT >= 31 && checkSelfPermission(Manifest.permission.BLUETOOTH_ADVERTISE) != PackageManager.PERMISSION_GRANTED) { requestBluetoothPermissions(); return }
-        startActivity(Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE).apply { putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 300) })
+        if (Build.VERSION.SDK_INT >= 31 && checkSelfPermission(Manifest.permission.BLUETOOTH_ADVERTISE) != PackageManager.PERMISSION_GRANTED) {
+            requestBluetoothPermissions(); return
+        }
+        startActivity(Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE).apply {
+            putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 300)
+        })
     }
 
     private fun loadKnownDevices() {
@@ -241,7 +227,9 @@ class MainActivity : Activity() {
 
     private fun startSearch() {
         val a = adapter ?: return
-        if (Build.VERSION.SDK_INT >= 31 && checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) { requestBluetoothPermissions(); return }
+        if (Build.VERSION.SDK_INT >= 31 && checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) {
+            requestBluetoothPermissions(); return
+        }
         try {
             if (a.isDiscovering) a.cancelDiscovery()
             loadKnownDevices()
@@ -258,7 +246,10 @@ class MainActivity : Activity() {
 
     private fun refreshDeviceList() {
         if (!::deviceSpinner.isInitialized) return
-        val list = devices.values.sortedWith(compareByDescending<BluetoothDevice> { it.bondState == BluetoothDevice.BOND_BONDED }.thenBy { safeName(it) })
+        val list = devices.values.sortedWith(
+            compareByDescending<BluetoothDevice> { it.bondState == BluetoothDevice.BOND_BONDED }
+                .thenBy { safeName(it) }
+        )
         val labels = list.map { d -> "${safeName(d)} • ${if (d.bondState == BluetoothDevice.BOND_BONDED) "Paired" else "Not paired"}" }
         deviceSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, labels)
         deviceSpinner.tag = list
@@ -304,9 +295,7 @@ class MainActivity : Activity() {
             } catch (e: Exception) {
                 if (e is InterruptedException) Thread.currentThread().interrupt()
                 if (connectionEpoch.compareAndSet(epoch, epoch + 1)) runOnUiThread {
-                    clearLocalBuffer()
-                    editor.isEnabled = false
-                    sendButton.isEnabled = false
+                    clearLocalBuffer(); editor.isEnabled = false; sendButton.isEnabled = false
                     status.text = "Sending stopped: ${e.message ?: "HID error"}"
                     ConnectionNotification.clear(this)
                 }
