@@ -19,6 +19,7 @@ class ClassicHid private constructor(
     private var device: BluetoothHidDevice? = null
     private var host: BluetoothDevice? = null
     private var lastHost: BluetoothDevice? = null
+    private var registered = false
 
     private val serviceListener = object : BluetoothProfile.ServiceListener {
         override fun onServiceConnected(profile: Int, proxy: BluetoothProfile) {
@@ -30,6 +31,7 @@ class ClassicHid private constructor(
 
         override fun onServiceDisconnected(profile: Int) {
             if (profile == BluetoothProfile.HID_DEVICE) {
+                registered = false
                 device = null
                 host = null
                 onStateChanged(false, null)
@@ -38,6 +40,7 @@ class ClassicHid private constructor(
     }
 
     override fun onAppStatusChanged(pluggedDevice: BluetoothDevice?, registered: Boolean) {
+        this.registered = registered
         if (!registered) {
             host = null
             onStateChanged(false, null)
@@ -47,9 +50,7 @@ class ClassicHid private constructor(
             host = pluggedDevice
             lastHost = pluggedDevice
         } else if (host == null && lastHost != null) {
-            try { device?.connect(lastHost) } catch (t: Throwable) {
-                Log.w(TAG, "reconnect failed", t)
-            }
+            try { device?.connect(lastHost) } catch (t: Throwable) { Log.w(TAG, "reconnect failed", t) }
         }
         onStateChanged(host != null, host?.let(::safeName))
     }
@@ -66,8 +67,7 @@ class ClassicHid private constructor(
 
     override fun onGetReport(remote: BluetoothDevice, type: Byte, id: Byte, bufferSize: Int) {
         val payload = if ((id.toInt() and 0xFF) == 0xFE) HidReports.HID_INFORMATION else ReportBuilder.keyboardEmpty()
-        try { device?.replyReport(remote, type, id, payload) }
-        catch (t: Throwable) { Log.w(TAG, "replyReport failed", t) }
+        try { device?.replyReport(remote, type, id, payload) } catch (t: Throwable) { Log.w(TAG, "replyReport failed", t) }
     }
 
     override fun onSetReport(remote: BluetoothDevice, type: Byte, id: Byte, data: ByteArray) = Unit
@@ -81,11 +81,8 @@ class ClassicHid private constructor(
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return
         val adapter = BluetoothAdapter.getDefaultAdapter() ?: return
         if (!adapter.isEnabled || device != null) return
-        try {
-            adapter.getProfileProxy(context.applicationContext, serviceListener, BluetoothProfile.HID_DEVICE)
-        } catch (t: Throwable) {
-            Log.w(TAG, "getProfileProxy failed", t)
-        }
+        try { adapter.getProfileProxy(context.applicationContext, serviceListener, BluetoothProfile.HID_DEVICE) }
+        catch (t: Throwable) { Log.w(TAG, "getProfileProxy failed", t) }
     }
 
     private fun registerApp() {
@@ -119,7 +116,7 @@ class ClassicHid private constructor(
     }
 
     fun currentHost(): BluetoothDevice? = host
-
+    fun isRegistered(): Boolean = registered
     fun isConnected(): Boolean = host != null
 
     fun send(modifiers: Int, usage: Int): Boolean {
@@ -131,19 +128,18 @@ class ClassicHid private constructor(
 
     fun close() {
         host = null
+        registered = false
         val d = device
         device = null
         try { d?.unregisterApp() } catch (_: Throwable) {}
         try { BluetoothAdapter.getDefaultAdapter()?.closeProfileProxy(BluetoothProfile.HID_DEVICE, d) } catch (_: Throwable) {}
     }
 
-    private fun safeName(d: BluetoothDevice): String = try {
-        d.name?.takeIf { it.isNotBlank() } ?: d.address
-    } catch (_: Throwable) { "Bluetooth host" }
+    private fun safeName(d: BluetoothDevice): String = try { d.name?.takeIf { it.isNotBlank() } ?: d.address }
+    catch (_: Throwable) { "Bluetooth host" }
 
     companion object {
         private const val TAG = "RemoteKeyboardHid"
-        fun create(context: Context, onStateChanged: (Boolean, String?) -> Unit) =
-            ClassicHid(context.applicationContext, onStateChanged)
+        fun create(context: Context, onStateChanged: (Boolean, String?) -> Unit) = ClassicHid(context.applicationContext, onStateChanged)
     }
 }
