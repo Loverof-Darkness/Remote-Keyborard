@@ -46,7 +46,6 @@ class ClassicHid private constructor(
             onStateChanged(false, null)
             return
         }
-
         if (pluggedDevice != null) {
             host = pluggedDevice
             lastHost = pluggedDevice
