@@ -17,4 +17,4 @@ Android Bluetooth HID remote keyboard.
 
 ## Limitations
 
-This release remains dependent on the phone manufacturer's Bluetooth HID Device support. Text transport is intentionally limited to characters representable by the bundled US-layout HID mapping; Unicode, emoji, clipboard transfer, and mouse control require a companion protocol or future transport layer.
+The app depends on the phone manufacturer's Bluetooth HID Device support. Text transport is limited to characters represented by the bundled US-layout HID mapping. Unicode, emoji, clipboard transfer, mouse control, and background operation are outside this MVP and require a companion protocol or future transport layer.
