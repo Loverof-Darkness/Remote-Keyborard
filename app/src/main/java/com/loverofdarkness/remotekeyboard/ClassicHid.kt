@@ -28,7 +28,6 @@ class ClassicHid private constructor(
                 registerApp()
             }
         }
-
         override fun onServiceDisconnected(profile: Int) {
             if (profile == BluetoothProfile.HID_DEVICE) {
                 registered = false
@@ -56,11 +55,12 @@ class ClassicHid private constructor(
     }
 
     override fun onConnectionStateChanged(remote: BluetoothDevice, state: Int) {
-        if (state == BluetoothProfile.STATE_CONNECTED) {
-            host = remote
-            lastHost = remote
-        } else if (host == remote) {
-            host = null
+        when (state) {
+            BluetoothProfile.STATE_CONNECTED -> {
+                host = remote
+                lastHost = remote
+            }
+            BluetoothProfile.STATE_DISCONNECTED -> if (host == remote) host = null
         }
         onStateChanged(host != null, host?.let(::safeName))
     }
