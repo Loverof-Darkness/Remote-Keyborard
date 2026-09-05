@@ -83,14 +83,12 @@ class MainActivity : Activity() {
             setPadding(dp(16), dp(12), dp(16), dp(12))
             setBackgroundColor(Color.BLACK)
         }
-
         root.addView(TextView(this).apply {
             text = "Remote Keyboard"
             textSize = 26f
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
         })
-
         status = TextView(this).apply {
             text = "Preparing Bluetooth…"
             textSize = 15f
@@ -99,29 +97,24 @@ class MainActivity : Activity() {
             setPadding(0, dp(12), 0, dp(12))
         }
         root.addView(status)
-
         deviceSpinner = Spinner(this)
         root.addView(deviceSpinner)
-
         searchButton = addButton(root, "Search Bluetooth devices") { startSearch() }
         addButton(root, "Make phone discoverable") { makeDiscoverable() }
         addButton(root, "Connect selected") { connectSelected() }
         addButton(root, "Disconnect") { hid?.disconnect() }
-
         liveSwitch = Switch(this).apply {
             text = "Live typing"
             setTextColor(Color.WHITE)
             isChecked = true
         }
         root.addView(liveSwitch)
-
         root.addView(TextView(this).apply {
             text = "Live mirrors the current buffer. After moving the laptop cursor, tap New buffer. Buffered mode lets you compose first, then Send. US-layout ASCII only."
             textSize = 13f
             setTextColor(0xFFBBBBBB.toInt())
             setPadding(0, dp(4), 0, dp(8))
         })
-
         editor = EditText(this).apply {
             hint = "Tap here to open your native keyboard"
             textSize = 18f
@@ -139,11 +132,9 @@ class MainActivity : Activity() {
             isEnabled = false
         }
         root.addView(editor, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
-
         sendButton = addButton(root, "Send buffered text") { sendBufferedText() }
         sendButton.isEnabled = false
         addButton(root, "New buffer") { clearLocalBuffer() }
-
         addKeyRow(root, listOf(
             "Enter" to HidKeyMapper.ENTER,
             "Backspace" to HidKeyMapper.BACKSPACE,
@@ -156,16 +147,13 @@ class MainActivity : Activity() {
             "↓" to HidKeyMapper.DOWN,
             "→" to HidKeyMapper.RIGHT
         ))
-
         liveSwitch.setOnCheckedChangeListener { _, checked ->
             clearLocalBuffer()
             sendButton.isEnabled = !checked && hid?.isConnected() == true
         }
-
         editor.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
-
             override fun afterTextChanged(s: Editable?) {
                 if (suppressChanges || !liveSwitch.isChecked || !hid?.isConnected().orFalse()) return
                 val next = s?.toString().orEmpty()
@@ -174,38 +162,29 @@ class MainActivity : Activity() {
                     status.text = "Only US-layout ASCII text is supported"
                     return
                 }
-
                 var common = 0
-                while (common < previousText.length &&
-                    common < next.length &&
-                    previousText[common] == next[common]
-                ) common++
-
+                while (common < previousText.length && common < next.length && previousText[common] == next[common]) common++
                 val strokes = ArrayList<Stroke>(previousText.length - common + next.length - common)
                 repeat(previousText.length - common) { strokes.add(Stroke(0, HidKeyMapper.BACKSPACE)) }
                 next.substring(common).forEach { c -> strokes.add(strokeFor(c)!!) }
-
                 if (queueStrokes(strokes)) previousText = next else restorePreviousText()
             }
         })
-
-        setContentView(ScrollView(this).apply {
-            isFillViewport = true
-            addView(root)
-        })
+        setContentView(ScrollView(this).apply { isFillViewport = true; addView(root) })
     }
 
     private fun requestBluetoothPermissions() {
+        val permissions = mutableListOf<String>()
         if (Build.VERSION.SDK_INT >= 31) {
-            val needed = arrayOf(
-                Manifest.permission.BLUETOOTH_CONNECT,
-                Manifest.permission.BLUETOOTH_SCAN,
-                Manifest.permission.BLUETOOTH_ADVERTISE
-            ).filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
-            if (needed.isNotEmpty()) {
-                requestPermissions(needed.toTypedArray(), REQUEST_BLUETOOTH)
-                return
-            }
+            permissions += Manifest.permission.BLUETOOTH_CONNECT
+            permissions += Manifest.permission.BLUETOOTH_SCAN
+            permissions += Manifest.permission.BLUETOOTH_ADVERTISE
+        }
+        if (Build.VERSION.SDK_INT >= 33) permissions += Manifest.permission.POST_NOTIFICATIONS
+        val needed = permissions.distinct().filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
+        if (needed.isNotEmpty()) {
+            requestPermissions(needed.toTypedArray(), REQUEST_BLUETOOTH)
+            return
         }
         startBluetooth()
     }
@@ -213,8 +192,12 @@ class MainActivity : Activity() {
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode != REQUEST_BLUETOOTH) return
-        if (grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) startBluetooth()
-        else status.text = "Nearby devices permissions are required"
+        val bluetoothOk = if (Build.VERSION.SDK_INT >= 31) {
+            checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED &&
+                checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED &&
+                checkSelfPermission(Manifest.permission.BLUETOOTH_ADVERTISE) == PackageManager.PERMISSION_GRANTED
+        } else true
+        if (bluetoothOk) startBluetooth() else status.text = "Nearby devices permissions are required"
     }
 
     private fun startBluetooth() {
@@ -248,11 +231,9 @@ class MainActivity : Activity() {
             requestBluetoothPermissions()
             return
         }
-        startActivity(
-            Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE).apply {
-                putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 300)
-            }
-        )
+        startActivity(Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE).apply {
+            putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 300)
+        })
     }
 
     private fun loadKnownDevices() {
@@ -290,13 +271,8 @@ class MainActivity : Activity() {
 
     private fun refreshDeviceList() {
         if (!::deviceSpinner.isInitialized) return
-        val list = devices.values.sortedWith(
-            compareByDescending<BluetoothDevice> { it.bondState == BluetoothDevice.BOND_BONDED }
-                .thenBy { safeName(it) }
-        )
-        val labels = list.map { d ->
-            "${safeName(d)} • ${if (d.bondState == BluetoothDevice.BOND_BONDED) "Paired" else "Not paired"}"
-        }
+        val list = devices.values.sortedWith(compareByDescending<BluetoothDevice> { it.bondState == BluetoothDevice.BOND_BONDED }.thenBy { safeName(it) })
+        val labels = list.map { d -> "${safeName(d)} • ${if (d.bondState == BluetoothDevice.BOND_BONDED) "Paired" else "Not paired"}" }
         deviceSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, labels)
         deviceSpinner.tag = list
     }
@@ -332,14 +308,8 @@ class MainActivity : Activity() {
 
     private fun queueStrokes(strokes: List<Stroke>): Boolean {
         if (strokes.isEmpty()) return true
-        val service = hid ?: run {
-            status.text = "Connect a laptop first"
-            return false
-        }
-        if (!service.isConnected()) {
-            status.text = "Connect a laptop first"
-            return false
-        }
+        val service = hid ?: run { status.text = "Connect a laptop first"; return false }
+        if (!service.isConnected()) { status.text = "Connect a laptop first"; return false }
         val epoch = connectionEpoch.get()
         sender.execute {
             try {
@@ -393,9 +363,7 @@ class MainActivity : Activity() {
         keys.forEach { (label, usage) ->
             val button = Button(this).apply {
                 text = label
-                setOnClickListener {
-                    if (queueStrokes(listOf(Stroke(0, usage)))) clearLocalBuffer()
-                }
+                setOnClickListener { if (queueStrokes(listOf(Stroke(0, usage)))) clearLocalBuffer() }
             }
             row.addView(button, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         }
@@ -403,17 +371,13 @@ class MainActivity : Activity() {
     }
 
     private fun addButton(parent: LinearLayout, label: String, action: () -> Unit): Button {
-        val button = Button(this).apply {
-            text = label
-            setOnClickListener { action() }
-        }
+        val button = Button(this).apply { text = label; setOnClickListener { action() } }
         parent.addView(button)
         return button
     }
 
-    private fun safeName(device: BluetoothDevice): String = try {
-        device.name?.takeIf { it.isNotBlank() } ?: device.address
-    } catch (_: Throwable) { "Bluetooth device" }
+    private fun safeName(device: BluetoothDevice): String = try { device.name?.takeIf { it.isNotBlank() } ?: device.address }
+    catch (_: Throwable) { "Bluetooth device" }
 
     override fun onStart() {
         super.onStart()
@@ -453,10 +417,7 @@ class MainActivity : Activity() {
         else getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
 
     private fun Boolean?.orFalse(): Boolean = this == true
-
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
-    companion object {
-        private const val REQUEST_BLUETOOTH = 77
-    }
+    companion object { private const val REQUEST_BLUETOOTH = 77 }
 }
