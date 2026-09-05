@@ -5,7 +5,6 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# Do not cancel a build just because another commit was pushed.
 concurrency:
   group: build-apk-${{ github.ref }}
   cancel-in-progress: false
@@ -19,87 +18,52 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-
       - name: Set up Java 17
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
           cache: gradle
-
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
-        with:
-          packages: platform-tools
-
       - name: Install Android SDK packages
         run: sdkmanager --install "platforms;android-35" "build-tools;35.0.0"
-
       - name: Set up Gradle 8.7
         uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: '8.7'
-
       - name: Build Bluetooth HID compile stub
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p app/stubs /tmp/hid-stubs-classes
-          javac \
-            -cp "$ANDROID_HOME/platforms/android-35/android.jar" \
-            -d /tmp/hid-stubs-classes \
+          javac -cp "$ANDROID_HOME/platforms/android-35/android.jar" -d /tmp/hid-stubs-classes \
             app/stubs-src/android/bluetooth/BluetoothHidDevice.java \
             app/stubs-src/android/bluetooth/BluetoothHidDeviceAppSdpSettings.java \
             app/stubs-src/android/bluetooth/BluetoothHidDeviceAppQosSettings.java
           jar cf app/stubs/hidden-android.jar -C /tmp/hid-stubs-classes .
-
       - name: Build optimized release APK
         run: gradle --no-daemon --stacktrace clean assembleRelease
-
       - name: Sign and verify optimized release APK
         shell: bash
         run: |
           set -euo pipefail
           BUILD_DIR="app/build/outputs/apk/release"
           UNSIGNED_APK="$(find "$BUILD_DIR" -maxdepth 1 -type f -name '*-unsigned.apk' -print -quit)"
-          if [[ -z "$UNSIGNED_APK" ]]; then
-            echo "ERROR: No unsigned release APK found"
-            find "$BUILD_DIR" -maxdepth 1 -type f -print
-            exit 1
-          fi
-
+          if [[ -z "$UNSIGNED_APK" ]]; then echo "ERROR: No unsigned release APK found"; find "$BUILD_DIR" -maxdepth 1 -type f -print; exit 1; fi
           SIGNED_APK="$BUILD_DIR/remote-keyboard.apk"
           ALIGNED_APK="$BUILD_DIR/remote-keyboard-aligned.apk"
           KEYSTORE="$RUNNER_TEMP/remote-keyboard.keystore"
           ALIAS="remote-keyboard"
           PASS="android"
-
-          keytool -genkeypair -v \
-            -keystore "$KEYSTORE" \
-            -storepass "$PASS" \
-            -keypass "$PASS" \
-            -alias "$ALIAS" \
-            -keyalg RSA \
-            -keysize 2048 \
-            -validity 10000 \
-            -dname "CN=Remote Keyboard, OU=Build, O=Loverof-Darkness, L=NA, ST=NA, C=IN"
-
+          keytool -genkeypair -v -keystore "$KEYSTORE" -storepass "$PASS" -keypass "$PASS" -alias "$ALIAS" -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Remote Keyboard, OU=Build, O=Loverof-Darkness, L=NA, ST=NA, C=IN"
           "$ANDROID_HOME/build-tools/35.0.0/zipalign" -f -p 4 "$UNSIGNED_APK" "$ALIGNED_APK"
-          "$ANDROID_HOME/build-tools/35.0.0/apksigner" sign \
-            --ks "$KEYSTORE" \
-            --ks-pass pass:"$PASS" \
-            --key-pass pass:"$PASS" \
-            --ks-key-alias "$ALIAS" \
-            --out "$SIGNED_APK" \
-            "$ALIGNED_APK"
-
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" sign --ks "$KEYSTORE" --ks-pass pass:"$PASS" --key-pass pass:"$PASS" --ks-key-alias "$ALIAS" --out "$SIGNED_APK" "$ALIGNED_APK"
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$SIGNED_APK"
           rm -f "$UNSIGNED_APK" "$ALIGNED_APK"
-
           echo "Installable APK: $SIGNED_APK"
           ls -lh "$SIGNED_APK"
           sha256sum "$SIGNED_APK"
-
       - name: Upload installable APK
         uses: actions/upload-artifact@v6
         with:
