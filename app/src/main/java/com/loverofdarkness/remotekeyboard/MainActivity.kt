@@ -135,7 +135,9 @@ class MainActivity : Activity() {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode != REQUEST_BLUETOOTH) return
         val bluetoothOk = if (Build.VERSION.SDK_INT >= 31) {
-            checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED && checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED && checkSelfPermission(Manifest.permission.BLUETOOTH_ADVERTISE) == PackageManager.PERMISSION_GRANTED
+            checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED &&
+                checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED &&
+                checkSelfPermission(Manifest.permission.BLUETOOTH_ADVERTISE) == PackageManager.PERMISSION_GRANTED
         } else true
         if (bluetoothOk) startBluetooth() else status.text = "Nearby devices permissions are required"
     }
@@ -147,7 +149,8 @@ class MainActivity : Activity() {
         if (hid == null) {
             hid = ClassicHid.create(this) { connected, name ->
                 runOnUiThread {
-                    editor.isEnabled = connected; sendButton.isEnabled = connected && !liveSwitch.isChecked
+                    editor.isEnabled = connected
+                    sendButton.isEnabled = connected && !liveSwitch.isChecked
                     status.setTextColor(if (connected) 0xFF55FF88.toInt() else 0xFFFFAA55.toInt())
                     status.text = if (connected) "Connected: ${name ?: "Bluetooth host"}" else "Disconnected"
                     if (connected) ConnectionNotification.show(this, name ?: "Bluetooth host") else ConnectionNotification.clear(this)
@@ -221,8 +224,7 @@ class MainActivity : Activity() {
                 if (e is InterruptedException) Thread.currentThread().interrupt()
                 if (connectionEpoch.compareAndSet(epoch, epoch + 1)) runOnUiThread {
                     clearLocalBuffer(); editor.isEnabled = false; sendButton.isEnabled = false
-                    status.text = "Sending stopped: ${e.message ?: "HID error"}"
-                    ConnectionNotification.clear(this)
+                    status.text = "Sending stopped: ${e.message ?: "HID error"}"; ConnectionNotification.clear(this)
                 }
             }
         }
