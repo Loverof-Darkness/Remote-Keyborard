@@ -36,6 +36,7 @@ class MainActivity : Activity() {
     private lateinit var liveSwitch: Switch
     private lateinit var sendButton: Button
     private lateinit var searchButton: Button
+
     private var devices = linkedMapOf<String, BluetoothDevice>()
     private var hid: ClassicHid? = null
     private val adapter: BluetoothAdapter? by lazy { BluetoothAdapter.getDefaultAdapter() }
@@ -44,6 +45,7 @@ class MainActivity : Activity() {
     private var previousText = ""
     private var suppressChanges = false
     private var receiverRegistered = false
+
     private data class Stroke(val modifier: Int, val usage: Int)
 
     private val receiver = object : BroadcastReceiver() {
@@ -76,7 +78,11 @@ class MainActivity : Activity() {
     }
 
     private fun buildUi() {
-        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(12), dp(16), dp(12)); setBackgroundColor(Color.BLACK) }
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(12), dp(16), dp(12))
+            setBackgroundColor(Color.BLACK)
+        }
         root.addView(TextView(this).apply { text = "Remote Keyboard"; textSize = 26f; setTextColor(Color.WHITE); gravity = Gravity.CENTER })
         status = TextView(this).apply { text = "Preparing Bluetooth…"; textSize = 15f; setTextColor(0xFFFFAA55.toInt()); gravity = Gravity.CENTER; setPadding(0, dp(12), 0, dp(12)) }
         root.addView(status)
@@ -90,13 +96,23 @@ class MainActivity : Activity() {
         root.addView(liveSwitch)
         root.addView(TextView(this).apply { text = "Live mirrors the current buffer. After moving the laptop cursor, tap New buffer. Buffered mode lets you compose first, then Send. US-layout ASCII only."; textSize = 13f; setTextColor(0xFFBBBBBB.toInt()); setPadding(0, dp(4), 0, dp(8)) })
         editor = EditText(this).apply {
-            hint = "Tap here to open your native keyboard"; textSize = 18f; minLines = 5; gravity = Gravity.TOP or Gravity.START
-            setTextColor(Color.WHITE); setHintTextColor(0xFF888888.toInt()); setPadding(dp(16), dp(16), dp(16), dp(16)); setBackgroundColor(0xFF181818.toInt())
+            hint = "Tap here to open your native keyboard"
+            textSize = 18f
+            minLines = 5
+            maxLines = 12
+            gravity = Gravity.TOP or Gravity.START
+            setTextColor(Color.WHITE)
+            setHintTextColor(0xFF888888.toInt())
+            setPadding(dp(16), dp(16), dp(16), dp(16))
+            setBackgroundColor(0xFF181818.toInt())
             inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE or android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
-            imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI; filters = arrayOf(InputFilter.LengthFilter(1024)); isEnabled = false
+            imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI
+            filters = arrayOf(InputFilter.LengthFilter(1024))
+            isEnabled = false
         }
         root.addView(editor, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
-        sendButton = addButton(root, "Send buffered text") { sendBufferedText() }; sendButton.isEnabled = false
+        sendButton = addButton(root, "Send buffered text") { sendBufferedText() }
+        sendButton.isEnabled = false
         addButton(root, "New buffer") { clearLocalBuffer() }
         addKeyRow(root, listOf("Enter" to HidKeyMapper.ENTER, "Backspace" to HidKeyMapper.BACKSPACE, "Tab" to HidKeyMapper.TAB, "Esc" to HidKeyMapper.ESC))
         addKeyRow(root, listOf("←" to HidKeyMapper.LEFT, "↑" to HidKeyMapper.UP, "↓" to HidKeyMapper.DOWN, "→" to HidKeyMapper.RIGHT))
@@ -131,11 +147,7 @@ class MainActivity : Activity() {
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode != REQUEST_BLUETOOTH) return
-        val bluetoothGranted = Build.VERSION.SDK_INT < 31 || (
-            checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED &&
-                checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED &&
-                checkSelfPermission(Manifest.permission.BLUETOOTH_ADVERTISE) == PackageManager.PERMISSION_GRANTED
-        )
+        val bluetoothGranted = Build.VERSION.SDK_INT < 31 || (checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED && checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED && checkSelfPermission(Manifest.permission.BLUETOOTH_ADVERTISE) == PackageManager.PERMISSION_GRANTED)
         if (bluetoothGranted) startBluetooth() else status.text = "Nearby devices permissions are required"
     }
 
@@ -178,24 +190,39 @@ class MainActivity : Activity() {
         if (Build.VERSION.SDK_INT >= 31 && checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) { requestBluetoothPermissions(); return }
         try {
             if (a.isDiscovering) a.cancelDiscovery()
-            loadKnownDevices(); searchButton.isEnabled = false; searchButton.text = "Searching…"; status.text = "Searching nearby Bluetooth devices…"; a.startDiscovery()
-        } catch (t: Throwable) { searchButton.isEnabled = true; searchButton.text = "Search Bluetooth devices"; status.text = "Bluetooth search failed: ${t.javaClass.simpleName}" }
+            loadKnownDevices()
+            searchButton.isEnabled = false
+            searchButton.text = "Searching…"
+            status.text = "Searching nearby Bluetooth devices…"
+            a.startDiscovery()
+        } catch (t: Throwable) {
+            searchButton.isEnabled = true
+            searchButton.text = "Search Bluetooth devices"
+            status.text = "Bluetooth search failed: ${t.javaClass.simpleName}"
+        }
     }
 
     private fun refreshDeviceList() {
         if (!::deviceSpinner.isInitialized) return
         val list = devices.values.sortedWith(compareByDescending<BluetoothDevice> { it.bondState == BluetoothDevice.BOND_BONDED }.thenBy { safeName(it) })
         val labels = list.map { d -> "${safeName(d)} • ${if (d.bondState == BluetoothDevice.BOND_BONDED) "Paired" else "Not paired"}" }
-        deviceSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, labels); deviceSpinner.tag = list
+        deviceSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, labels)
+        deviceSpinner.tag = list
     }
 
     @Suppress("UNCHECKED_CAST")
     private fun connectSelected() {
         val list = deviceSpinner.tag as? List<BluetoothDevice> ?: emptyList()
         val device = list.getOrNull(deviceSpinner.selectedItemPosition) ?: run { status.text = "Select a Bluetooth device first"; return }
-        if (device.bondState != BluetoothDevice.BOND_BONDED) { status.text = "Pair this device first"; try { device.createBond() } catch (t: Throwable) { status.text = "Pairing failed: ${t.javaClass.simpleName}" }; return }
+        if (device.bondState != BluetoothDevice.BOND_BONDED) {
+            status.text = "Pair this device first"
+            try { device.createBond() } catch (t: Throwable) { status.text = "Pairing failed: ${t.javaClass.simpleName}" }
+            return
+        }
         if (hid == null) startBluetooth()
-        connectionEpoch.incrementAndGet(); status.text = "Connecting to ${safeName(device)}…"; hid?.connect(device)
+        connectionEpoch.incrementAndGet()
+        status.text = "Connecting to ${safeName(device)}…"
+        hid?.connect(device)
     }
 
     private fun sendBufferedText() {
@@ -222,8 +249,11 @@ class MainActivity : Activity() {
             } catch (e: Exception) {
                 if (e is InterruptedException) Thread.currentThread().interrupt()
                 if (connectionEpoch.compareAndSet(epoch, epoch + 1)) runOnUiThread {
-                    clearLocalBuffer(); editor.isEnabled = false; sendButton.isEnabled = false
-                    status.text = "Sending stopped: ${e.message ?: "HID error"}"; ConnectionNotification.clear(this)
+                    clearLocalBuffer()
+                    editor.isEnabled = false
+                    sendButton.isEnabled = false
+                    status.text = "Sending stopped: ${e.message ?: "HID error"}"
+                    ConnectionNotification.clear(this)
                 }
             }
         }
@@ -237,19 +267,23 @@ class MainActivity : Activity() {
 
     private fun addKeyRow(parent: LinearLayout, keys: List<Pair<String, Int>>) {
         val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        keys.forEach { (label, usage) -> row.addView(Button(this).apply { text = label; setOnClickListener { if (queueStrokes(listOf(Stroke(0, usage)))) clearLocalBuffer() } }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)) }
+        keys.forEach { (label, usage) ->
+            row.addView(Button(this).apply { text = label; setOnClickListener { if (queueStrokes(listOf(Stroke(0, usage)))) clearLocalBuffer() } }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        }
         parent.addView(row)
     }
 
     private fun addButton(parent: LinearLayout, label: String, action: () -> Unit): Button {
         val button = Button(this).apply { text = label; setOnClickListener { action() } }
-        parent.addView(button); return button
+        parent.addView(button)
+        return button
     }
 
     private fun safeName(device: BluetoothDevice): String = try { device.name?.takeIf { it.isNotBlank() } ?: device.address } catch (_: Throwable) { "Bluetooth device" }
 
     override fun onStart() {
-        super.onStart(); if (receiverRegistered) return
+        super.onStart()
+        if (receiverRegistered) return
         val filter = IntentFilter().apply { addAction(BluetoothDevice.ACTION_FOUND); addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED); addAction(BluetoothDevice.ACTION_BOND_STATE_CHANGED) }
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(receiver, filter, RECEIVER_NOT_EXPORTED) else @Suppress("DEPRECATION") registerReceiver(receiver, filter)
         receiverRegistered = true
@@ -262,8 +296,13 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
-        connectionEpoch.incrementAndGet(); sender.shutdownNow(); try { adapter?.cancelDiscovery() } catch (_: Throwable) {}
-        hid?.close(); hid = null; ConnectionNotification.clear(this); super.onDestroy()
+        connectionEpoch.incrementAndGet()
+        sender.shutdownNow()
+        try { adapter?.cancelDiscovery() } catch (_: Throwable) {}
+        hid?.close()
+        hid = null
+        ConnectionNotification.clear(this)
+        super.onDestroy()
     }
 
     @Suppress("DEPRECATION")
