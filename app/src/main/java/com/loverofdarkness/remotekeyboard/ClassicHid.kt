@@ -11,7 +11,7 @@ import android.os.Build
 import android.util.Log
 import java.util.concurrent.Executor
 
-/** Minimal Bluetooth Classic HID keyboard bridge. */
+/** Bluetooth Classic HID device bridge. */
 class ClassicHid private constructor(
     private val context: Context,
     private val onStateChanged: (Boolean, String?) -> Unit
@@ -65,35 +65,31 @@ class ClassicHid private constructor(
     }
 
     override fun onGetReport(remote: BluetoothDevice, type: Byte, id: Byte, bufferSize: Int) {
-        val payload = if ((id.toInt() and 0xFF) == 0xFE) {
-            HidReports.HID_INFORMATION
-        } else {
-            ReportBuilder.keyboardEmpty()
-        }
+        val payload = if ((id.toInt() and 0xFF) == 0xFE) HidReports.HID_INFORMATION else ReportBuilder.keyboardEmpty()
         try { device?.replyReport(remote, type, id, payload) }
         catch (t: Throwable) { Log.w(TAG, "replyReport failed", t) }
     }
 
     override fun onSetReport(remote: BluetoothDevice, type: Byte, id: Byte, data: ByteArray) = Unit
     override fun onVirtualCableUnplug(remote: BluetoothDevice) {
-        host = null
+        if (host == remote) host = null
         onStateChanged(false, null)
     }
     override fun onInterruptData(remote: BluetoothDevice, reportId: Byte, data: ByteArray) = Unit
 
-    override fun start() {
-        if (Build.VERSION.SDK_INT < 28) return
+    fun start() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return
         val adapter = BluetoothAdapter.getDefaultAdapter() ?: return
         if (!adapter.isEnabled || device != null) return
-        try { adapter.getProfileProxy(context.applicationContext, serviceListener, BluetoothProfile.HID_DEVICE) }
-        catch (t: Throwable) { Log.w(TAG, "getProfileProxy failed", t) }
+        try {
+            adapter.getProfileProxy(context.applicationContext, serviceListener, BluetoothProfile.HID_DEVICE)
+        } catch (t: Throwable) {
+            Log.w(TAG, "getProfileProxy failed", t)
+        }
     }
 
     private fun registerApp() {
         val d = device ?: return
-        // Match the known-working reference registration exactly first. The
-        // reference uses a COMBO subclass and a combined descriptor; Windows
-        // and Linux hosts accept this SDP/HID registration reliably.
         val sdp = BluetoothHidDeviceAppSdpSettings(
             "BT HID Remote",
             "Bluetooth keyboard, mouse and presenter",
@@ -112,8 +108,7 @@ class ClassicHid private constructor(
 
     fun connect(remote: BluetoothDevice) {
         lastHost = remote
-        try { device?.connect(remote) }
-        catch (t: Throwable) { Log.w(TAG, "connect failed", t) }
+        try { device?.connect(remote) } catch (t: Throwable) { Log.w(TAG, "connect failed", t) }
     }
 
     fun disconnect() {
@@ -122,6 +117,8 @@ class ClassicHid private constructor(
         try { device?.disconnect(h) } catch (t: Throwable) { Log.w(TAG, "disconnect failed", t) }
         onStateChanged(false, null)
     }
+
+    fun currentHost(): BluetoothDevice? = host
 
     fun isConnected(): Boolean = host != null
 
@@ -146,6 +143,7 @@ class ClassicHid private constructor(
 
     companion object {
         private const val TAG = "RemoteKeyboardHid"
-        fun create(context: Context, onStateChanged: (Boolean, String?) -> Unit) = ClassicHid(context.applicationContext, onStateChanged)
+        fun create(context: Context, onStateChanged: (Boolean, String?) -> Unit) =
+            ClassicHid(context.applicationContext, onStateChanged)
     }
 }
