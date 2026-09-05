@@ -46,6 +46,7 @@ class ClassicHid private constructor(
             onStateChanged(false, null)
             return
         }
+
         if (pluggedDevice != null) {
             host = pluggedDevice
             lastHost = pluggedDevice
@@ -73,6 +74,7 @@ class ClassicHid private constructor(
     override fun onSetReport(remote: BluetoothDevice, type: Byte, id: Byte, data: ByteArray) = Unit
     override fun onVirtualCableUnplug(remote: BluetoothDevice) {
         if (host == remote) host = null
+        if (lastHost == remote) lastHost = null
         onStateChanged(false, null)
     }
     override fun onInterruptData(remote: BluetoothDevice, reportId: Byte, data: ByteArray) = Unit
@@ -105,12 +107,19 @@ class ClassicHid private constructor(
 
     fun connect(remote: BluetoothDevice) {
         lastHost = remote
-        try { device?.connect(remote) } catch (t: Throwable) { Log.w(TAG, "connect failed", t) }
+        val d = device
+        if (d == null) {
+            start()
+            return
+        }
+        if (!registered) return
+        try { d.connect(remote) } catch (t: Throwable) { Log.w(TAG, "connect failed", t) }
     }
 
     fun disconnect() {
-        val h = host ?: return
+        val h = host ?: lastHost ?: return
         host = null
+        lastHost = null
         try { device?.disconnect(h) } catch (t: Throwable) { Log.w(TAG, "disconnect failed", t) }
         onStateChanged(false, null)
     }
@@ -128,6 +137,7 @@ class ClassicHid private constructor(
 
     fun close() {
         host = null
+        lastHost = null
         registered = false
         val d = device
         device = null
