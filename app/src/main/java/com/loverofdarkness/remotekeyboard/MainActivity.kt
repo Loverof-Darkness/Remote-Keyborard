@@ -10,40 +10,63 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.os.Build
 import android.os.Bundle
+import android.text.Editable
+import android.text.InputFilter
+import android.text.TextWatcher
 import android.view.Gravity
-import android.view.View
+import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
-import android.view.inputmethod.InputConnection
-import android.view.inputmethod.InputConnectionWrapper
-import android.widget.*
+import android.widget.ArrayAdapter
+import android.widget.Button
+import android.widget.EditText
+import android.widget.LinearLayout
+import android.widget.ScrollView
+import android.widget.Spinner
+import android.widget.Switch
+import android.widget.TextView
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 
 class MainActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var deviceSpinner: Spinner
-    private lateinit var typeField: RemoteEditText
+    private lateinit var editor: EditText
+    private lateinit var liveSwitch: Switch
+    private lateinit var sendButton: Button
     private lateinit var searchButton: Button
+
     private var devices = linkedMapOf<String, BluetoothDevice>()
     private var hid: ClassicHid? = null
     private val adapter: BluetoothAdapter? by lazy { BluetoothAdapter.getDefaultAdapter() }
+    private val sender = Executors.newSingleThreadExecutor()
+    private val connectionEpoch = AtomicInteger(0)
+    private var previousText = ""
+    private var suppressChanges = false
+    private var receiverRegistered = false
+
+    private data class Stroke(val modifier: Int, val usage: Int)
 
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
-            if (intent.action == BluetoothDevice.ACTION_FOUND) {
-                val device = intent.getParcelableExtra<BluetoothDevice>(BluetoothDevice.EXTRA_DEVICE) ?: return
-                try { devices[device.address] = device } catch (_: SecurityException) {}
-                refreshDeviceList()
-            } else if (intent.action == BluetoothAdapter.ACTION_DISCOVERY_FINISHED) {
-                searchButton.isEnabled = true
-                searchButton.text = "🔍 Search Bluetooth Devices"
-                status.text = if (devices.isEmpty()) "● No devices found" else "● Select a device and Connect"
-            } else if (intent.action == BluetoothDevice.ACTION_BOND_STATE_CHANGED) {
-                val device = intent.getParcelableExtra<BluetoothDevice>(BluetoothDevice.EXTRA_DEVICE)
-                if (device != null) {
-                    try { devices[device.address] = device } catch (_: SecurityException) {}
+            when (intent.action) {
+                BluetoothDevice.ACTION_FOUND -> {
+                    val device = intent.getParcelableExtraCompat<BluetoothDevice>(BluetoothDevice.EXTRA_DEVICE) ?: return
+                    devices[device.address] = device
+                    refreshDeviceList()
+                }
+                BluetoothAdapter.ACTION_DISCOVERY_FINISHED -> {
+                    searchButton.isEnabled = true
+                    searchButton.text = "Search Bluetooth devices"
+                    status.text = if (devices.isEmpty()) "No Bluetooth devices found" else "Select a paired laptop and connect"
+                }
+                BluetoothDevice.ACTION_BOND_STATE_CHANGED -> {
+                    val device = intent.getParcelableExtraCompat<BluetoothDevice>(BluetoothDevice.EXTRA_DEVICE) ?: return
+                    devices[device.address] = device
                     refreshDeviceList()
                     if (device.bondState == BluetoothDevice.BOND_BONDED) {
-                        status.text = "● Paired — ready to connect"
+                        status.text = "Paired — ready to connect"
                     }
                 }
             }
@@ -56,66 +79,214 @@ class MainActivity : Activity() {
         requestBluetoothPermissions()
     }
 
+    private fun buildUi() {
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(12), dp(16), dp(12))
+            setBackgroundColor(Color.BLACK)
+        }
+
+        root.addView(TextView(this).apply {
+            text = "Remote Keyboard"
+            textSize = 26f
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+        })
+
+        status = TextView(this).apply {
+            text = "Preparing Bluetooth…"
+            textSize = 15f
+            setTextColor(0xFFFFAA55.toInt())
+            gravity = Gravity.CENTER
+            setPadding(0, dp(12), 0, dp(12))
+        }
+        root.addView(status)
+
+        deviceSpinner = Spinner(this)
+        root.addView(deviceSpinner)
+
+        searchButton = addButton(root, "Search Bluetooth devices") { startSearch() }
+        addButton(root, "Connect selected") { connectSelected() }
+        addButton(root, "Disconnect") { hid?.disconnect() }
+
+        liveSwitch = Switch(this).apply {
+            text = "Live typing"
+            setTextColor(Color.WHITE)
+            isChecked = true
+        }
+        root.addView(liveSwitch)
+
+        root.addView(TextView(this).apply {
+            text = "Live mirrors the current buffer. After moving the laptop cursor, tap New buffer. Buffered mode lets you compose first, then Send. US-layout ASCII only."
+            textSize = 13f
+            setTextColor(0xFFBBBBBB.toInt())
+            setPadding(0, dp(4), 0, dp(8))
+        })
+
+        editor = EditText(this).apply {
+            hint = "Tap here to open your native keyboard"
+            textSize = 18f
+            minLines = 5
+            gravity = Gravity.TOP or Gravity.START
+            setTextColor(Color.WHITE)
+            setHintTextColor(0xFF888888.toInt())
+            setPadding(dp(16), dp(16), dp(16), dp(16))
+            setBackgroundColor(0xFF181818.toInt())
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or
+                android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE or
+                android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+            imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI
+            filters = arrayOf(InputFilter.LengthFilter(1024))
+            isEnabled = false
+        }
+        root.addView(editor, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+
+        sendButton = addButton(root, "Send buffered text") { sendBufferedText() }
+        sendButton.isEnabled = false
+        addButton(root, "New buffer") { clearLocalBuffer() }
+
+        addKeyRow(root, listOf(
+            "Enter" to HidKeyMapper.ENTER,
+            "Backspace" to HidKeyMapper.BACKSPACE,
+            "Tab" to HidKeyMapper.TAB,
+            "Esc" to HidKeyMapper.ESC
+        ))
+        addKeyRow(root, listOf(
+            "←" to HidKeyMapper.LEFT,
+            "↑" to HidKeyMapper.UP,
+            "↓" to HidKeyMapper.DOWN,
+            "→" to HidKeyMapper.RIGHT
+        ))
+
+        liveSwitch.setOnCheckedChangeListener { _, checked ->
+            clearLocalBuffer()
+            sendButton.isEnabled = !checked && hid?.isConnected() == true
+        }
+
+        editor.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
+
+            override fun afterTextChanged(s: Editable?) {
+                if (suppressChanges || !liveSwitch.isChecked || hid?.isConnected() != true) return
+                val next = s?.toString().orEmpty()
+                if (!isSupported(next)) {
+                    restorePreviousText()
+                    status.text = "Only US-layout ASCII text is supported"
+                    return
+                }
+
+                var common = 0
+                while (common < previousText.length &&
+                    common < next.length &&
+                    previousText[common] == next[common]
+                ) common++
+
+                val strokes = ArrayList<Stroke>(previousText.length - common + next.length - common)
+                repeat(previousText.length - common) { strokes.add(Stroke(0, HidKeyMapper.BACKSPACE)) }
+                next.substring(common).forEach { c -> strokes.add(strokeFor(c)!!) }
+
+                if (queueStrokes(strokes)) previousText = next else restorePreviousText()
+            }
+        })
+
+        val scroll = ScrollView(this).apply {
+            isFillViewport = true
+            addView(root)
+        }
+        setContentView(scroll)
+    }
+
     private fun requestBluetoothPermissions() {
-        if (android.os.Build.VERSION.SDK_INT >= 31) {
-            val needed = arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
-            val missing = needed.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
-            if (missing.isNotEmpty()) requestPermissions(missing.toTypedArray(), REQUEST_BLUETOOTH)
-            else loadKnownDevices()
-        } else loadKnownDevices()
+        if (Build.VERSION.SDK_INT >= 31) {
+            val needed = arrayOf(
+                Manifest.permission.BLUETOOTH_CONNECT,
+                Manifest.permission.BLUETOOTH_SCAN,
+                Manifest.permission.BLUETOOTH_ADVERTISE
+            ).filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
+            if (needed.isNotEmpty()) {
+                requestPermissions(needed.toTypedArray(), REQUEST_BLUETOOTH)
+                return
+            }
+        }
+        startBluetooth()
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == REQUEST_BLUETOOTH && grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) loadKnownDevices()
+        if (requestCode != REQUEST_BLUETOOTH) return
+        if (grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) startBluetooth()
+        else status.text = "Nearby devices permissions are required"
     }
 
-    private fun buildUi() {
-        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(24,24,24,24); setBackgroundColor(Color.BLACK) }
-        root.addView(TextView(this).apply { text="Remote Keyboard"; textSize=26f; setTextColor(Color.WHITE); gravity=Gravity.CENTER })
-        status = TextView(this).apply { text="● Bluetooth permission required"; textSize=16f; setTextColor(0xFFFFAA55.toInt()); gravity=Gravity.CENTER; setPadding(0,16,0,16) }
-        root.addView(status)
-        deviceSpinner = Spinner(this); root.addView(deviceSpinner)
-        searchButton = Button(this).apply { text="🔍 Search Bluetooth Devices"; setOnClickListener { startSearch() } }
-        root.addView(searchButton)
-        root.addView(Button(this).apply { text="Connect Selected"; setOnClickListener { connectSelected() } })
-        root.addView(Button(this).apply { text="Disconnect"; setOnClickListener { hid?.disconnect() } })
-        typeField = RemoteEditText(this) { token ->
-            if (hid?.isConnected() != true) return@RemoteEditText
-            when { token == "\b" -> sendKey(HidKeyMapper.BACKSPACE); token.startsWith("\u0000") -> token.substring(1).toIntOrNull()?.let(::sendKey); token == "\n" -> sendKey(HidKeyMapper.ENTER); else -> sendText(token) }
-        }.apply {
-            hint="Tap here and type to your laptop"; textSize=18f; setTextColor(Color.WHITE); setHintTextColor(0xFF888888.toInt())
-            inputType=android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE
-            imeOptions=EditorInfo.IME_FLAG_NO_EXTRACT_UI; minLines=4; gravity=Gravity.TOP or Gravity.START; setPadding(20,20,20,20); setBackgroundColor(0xFF181818.toInt())
+    private fun startBluetooth() {
+        val a = adapter
+        if (a == null) {
+            status.text = "This device does not support Bluetooth"
+            return
         }
-        root.addView(typeField, LinearLayout.LayoutParams(-1,0,1f).apply { topMargin=16 })
-        setContentView(root)
+        if (!a.isEnabled) {
+            startActivity(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
+            status.text = "Enable Bluetooth, then retry"
+            return
+        }
+        loadKnownDevices()
+        if (hid == null) {
+            hid = ClassicHid.create(this) { connected, name ->
+                runOnUiThread {
+                    editor.isEnabled = connected
+                    sendButton.isEnabled = connected && !liveSwitch.isChecked
+                    status.setTextColor(if (connected) 0xFF55FF88.toInt() else 0xFFFFAA55.toInt())
+                    status.text = if (connected) "Connected: ${name ?: "Bluetooth host"}" else "Disconnected"
+                    if (connected) ConnectionNotification.show(this, name ?: "Bluetooth host") else ConnectionNotification.clear(this)
+                }
+            }
+            hid?.start()
+        }
     }
 
     private fun loadKnownDevices() {
         val a = adapter ?: return
-        if (android.os.Build.VERSION.SDK_INT >= 31 && checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) return
+        if (Build.VERSION.SDK_INT >= 31 && checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) return
         try {
-            devices.clear(); a.bondedDevices.forEach { devices[it.address] = it }; refreshDeviceList()
-            status.text = if (devices.isEmpty()) "● Tap Search to find Bluetooth devices" else "● Paired devices ready"
-        } catch (_: SecurityException) { status.text="● Bluetooth permission required" }
+            devices.clear()
+            a.bondedDevices.forEach { devices[it.address] = it }
+            refreshDeviceList()
+            if (devices.isEmpty()) status.text = "No paired devices — tap Search to discover"
+        } catch (_: SecurityException) {
+            status.text = "Bluetooth permission required"
+        }
     }
 
     private fun startSearch() {
         val a = adapter ?: return
-        if (android.os.Build.VERSION.SDK_INT >= 31 && checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) { requestBluetoothPermissions(); return }
+        if (Build.VERSION.SDK_INT >= 31 && checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) {
+            requestBluetoothPermissions()
+            return
+        }
         try {
             if (a.isDiscovering) a.cancelDiscovery()
-            devices.clear(); a.bondedDevices.forEach { devices[it.address] = it }; refreshDeviceList()
-            searchButton.isEnabled = false; searchButton.text = "🔎 Searching…"; status.text = "● Searching nearby Bluetooth devices…"
+            loadKnownDevices()
+            searchButton.isEnabled = false
+            searchButton.text = "Searching…"
+            status.text = "Searching nearby Bluetooth devices…"
             a.startDiscovery()
-        } catch (t: Throwable) { searchButton.isEnabled=true; status.text="● Bluetooth search failed: ${t.javaClass.simpleName}" }
+        } catch (t: Throwable) {
+            searchButton.isEnabled = true
+            searchButton.text = "Search Bluetooth devices"
+            status.text = "Bluetooth search failed: ${t.javaClass.simpleName}"
+        }
     }
 
     private fun refreshDeviceList() {
         if (!::deviceSpinner.isInitialized) return
-        val list = devices.values.toList().sortedWith(compareByDescending<BluetoothDevice> { it.bondState == BluetoothDevice.BOND_BONDED }.thenBy { try { it.name ?: it.address } catch (_: SecurityException) { it.address } })
-        val labels = list.map { d -> try { "${d.name ?: "Unknown device"} • ${if (d.bondState == BluetoothDevice.BOND_BONDED) "Paired" else "Not paired"}" } catch (_: SecurityException) { "Bluetooth device" } }
+        val list = devices.values.sortedWith(
+            compareByDescending<BluetoothDevice> { it.bondState == BluetoothDevice.BOND_BONDED }
+                .thenBy { safeName(it) }
+        )
+        val labels = list.map { d ->
+            "${safeName(d)} • ${if (d.bondState == BluetoothDevice.BOND_BONDED) "Paired" else "Not paired"}"
+        }
         deviceSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, labels)
         deviceSpinner.tag = list
     }
@@ -123,46 +294,173 @@ class MainActivity : Activity() {
     @Suppress("UNCHECKED_CAST")
     private fun connectSelected() {
         val list = deviceSpinner.tag as? List<BluetoothDevice> ?: emptyList()
-        val device = list.getOrNull(deviceSpinner.selectedItemPosition) ?: return
-        if (device.bondState != BluetoothDevice.BOND_BONDED) {
-            status.text = "● Pairing… confirm the Android Bluetooth prompt"
-            try { device.createBond() } catch (t: Throwable) { status.text="● Pairing failed: ${t.javaClass.simpleName}" }
+        val device = list.getOrNull(deviceSpinner.selectedItemPosition)
+        if (device == null) {
+            status.text = "Select a Bluetooth device first"
             return
         }
-        connectDevice(device)
-    }
-
-    private fun connectDevice(device: BluetoothDevice) {
-        if (adapter?.isDiscovering == true) adapter?.cancelDiscovery()
-        if (hid == null) {
-            hid = ClassicHid.create(this) { connected,name -> runOnUiThread {
-                status.text = if (connected) "● Connected: ${name ?: "Bluetooth device"}" else "● Disconnected"
-                status.setTextColor(if (connected) 0xFF55FF88.toInt() else 0xFFFF5555.toInt())
-            }}
-            hid?.start()
+        if (device.bondState != BluetoothDevice.BOND_BONDED) {
+            status.text = "Pair this device first"
+            try {
+                device.createBond()
+            } catch (t: Throwable) {
+                status.text = "Pairing failed: ${t.javaClass.simpleName}"
+            }
+            return
         }
-        status.text="● Connecting to ${try { device.name ?: device.address } catch (_: SecurityException) { "device" }}…"
+        if (hid == null) startBluetooth()
+        status.text = "Connecting to ${safeName(device)}…"
         hid?.connect(device)
     }
 
-    private fun sendText(text:String) { text.forEach { sendChar(it) } }
-    private fun sendChar(c:Char):Boolean { val m=HidKeyMapper.map(c) ?: return false; return sendKey(m.usage,m.modifier) }
-    private fun sendKey(usage:Int,modifier:Int=0):Boolean { if(hid?.send(modifier,usage)!=true)return false; hid?.send(0,0); return true }
+    private fun sendBufferedText() {
+        val text = editor.text.toString()
+        if (text.isEmpty()) return
+        if (!isSupported(text)) {
+            status.text = "Unsupported characters — use US-layout ASCII"
+            return
+        }
+        if (queueStrokes(text.map { strokeFor(it)!! })) clearLocalBuffer()
+    }
 
-    private class RemoteEditText(context:Context, private val emit:(String)->Unit):EditText(context) {
-        override fun onCreateInputConnection(outAttrs:EditorInfo):InputConnection {
-            val base=super.onCreateInputConnection(outAttrs)
-            return object:InputConnectionWrapper(base,false) {
-                override fun commitText(text:CharSequence?,newCursorPosition:Int):Boolean { text?.toString()?.takeIf{it.isNotEmpty()}?.let{emit(it.replace("\r","\n"))}; return super.commitText(text,newCursorPosition) }
-                override fun deleteSurroundingText(beforeLength:Int,afterLength:Int):Boolean { repeat(beforeLength.coerceAtMost(32)){emit("\b")}; return super.deleteSurroundingText(beforeLength,afterLength) }
-                override fun performEditorAction(actionCode:Int):Boolean { if(actionCode!=EditorInfo.IME_ACTION_NONE)emit("\n"); return super.performEditorAction(actionCode) }
+    private fun queueStrokes(strokes: List<Stroke>): Boolean {
+        if (strokes.isEmpty()) return true
+        val service = hid
+        val device = currentHost()
+        if (service == null || device == null) {
+            status.text = "Connect a laptop first"
+            return false
+        }
+        val epoch = connectionEpoch.get()
+        sender.execute {
+            try {
+                for (stroke in strokes) {
+                    if (connectionEpoch.get() != epoch) return@execute
+                    check(service.send(stroke.modifier, stroke.usage)) { "Key press rejected" }
+                    Thread.sleep(10)
+                    check(service.send(0, 0)) { "Key release rejected" }
+                    Thread.sleep(10)
+                }
+            } catch (e: Exception) {
+                if (e is InterruptedException) Thread.currentThread().interrupt()
+                if (connectionEpoch.compareAndSet(epoch, epoch + 1)) {
+                    runOnUiThread {
+                        clearLocalBuffer()
+                        editor.isEnabled = false
+                        sendButton.isEnabled = false
+                        status.text = "Sending stopped: ${e.message ?: "HID error"}"
+                        ConnectionNotification.clear(this)
+                    }
+                }
             }
+        }
+        return true
+    }
+
+    private fun currentHost(): BluetoothDevice? = hidHostField()
+
+    private fun hidHostField(): BluetoothDevice? {
+        return try {
+            val field = ClassicHid::class.java.getDeclaredField("host")
+            field.isAccessible = true
+            field.get(hid) as? BluetoothDevice
+        } catch (_: Throwable) {
+            null
         }
     }
 
-    override fun onStart() { super.onStart(); val f=IntentFilter().apply { addAction(BluetoothDevice.ACTION_FOUND); addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED); addAction(BluetoothDevice.ACTION_BOND_STATE_CHANGED) }; registerReceiver(receiver,f) }
-    override fun onStop() { try { adapter?.cancelDiscovery() } catch (_:Throwable) {}; try { unregisterReceiver(receiver) } catch (_:Throwable) {}; super.onStop() }
-    override fun onDestroy() { hid?.close(); hid=null; super.onDestroy() }
+    private fun clearLocalBuffer() {
+        suppressChanges = true
+        editor.setText("")
+        previousText = ""
+        suppressChanges = false
+    }
 
-    companion object { private const val REQUEST_BLUETOOTH=77 }
+    private fun restorePreviousText() {
+        suppressChanges = true
+        editor.setText(previousText)
+        editor.setSelection(editor.length())
+        suppressChanges = false
+    }
+
+    private fun isSupported(text: String): Boolean = text.all { strokeFor(it) != null }
+
+    private fun strokeFor(c: Char): Stroke? {
+        if (c == '\n') return Stroke(0, HidKeyMapper.ENTER)
+        if (c == '\t') return Stroke(0, HidKeyMapper.TAB)
+        return HidKeyMapper.map(c)?.let { Stroke(it.modifier, it.usage) }
+    }
+
+    private fun addKeyRow(parent: LinearLayout, keys: List<Pair<String, Int>>) {
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        keys.forEach { (label, usage) ->
+            val button = Button(this).apply {
+                text = label
+                setOnClickListener {
+                    if (queueStrokes(listOf(Stroke(0, usage)))) clearLocalBuffer()
+                }
+            }
+            row.addView(button, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        }
+        parent.addView(row)
+    }
+
+    private fun addButton(parent: LinearLayout, label: String, action: () -> Unit): Button {
+        val button = Button(this).apply {
+            text = label
+            setOnClickListener { action() }
+        }
+        parent.addView(button)
+        return button
+    }
+
+    private fun safeName(device: BluetoothDevice): String = try {
+        device.name?.takeIf { it.isNotBlank() } ?: device.address
+    } catch (_: Throwable) {
+        "Bluetooth device"
+    }
+
+    override fun onStart() {
+        super.onStart()
+        if (!receiverRegistered) {
+            val filter = IntentFilter().apply {
+                addAction(BluetoothDevice.ACTION_FOUND)
+                addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED)
+                addAction(BluetoothDevice.ACTION_BOND_STATE_CHANGED)
+            }
+            if (Build.VERSION.SDK_INT >= 33) {
+                registerReceiver(receiver, filter, RECEIVER_NOT_EXPORTED)
+            } else {
+                @Suppress("DEPRECATION") registerReceiver(receiver, filter)
+            }
+            receiverRegistered = true
+        }
+    }
+
+    override fun onStop() {
+        try { adapter?.cancelDiscovery() } catch (_: Throwable) {}
+        if (receiverRegistered) {
+            try { unregisterReceiver(receiver) } catch (_: Throwable) {}
+            receiverRegistered = false
+        }
+        super.onStop()
+    }
+
+    override fun onDestroy() {
+        connectionEpoch.incrementAndGet()
+        sender.shutdownNow()
+        try { adapter?.cancelDiscovery() } catch (_: Throwable) {}
+        hid?.close()
+        hid = null
+        ConnectionNotification.clear(this)
+        super.onDestroy()
+    }
+
+    private fun Intent.getParcelableExtraCompat(): BluetoothDevice? =
+        if (Build.VERSION.SDK_INT >= 33) getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
+        else @Suppress("DEPRECATION") getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+
+    companion object {
+        private const val REQUEST_BLUETOOTH = 77
+    }
 }
