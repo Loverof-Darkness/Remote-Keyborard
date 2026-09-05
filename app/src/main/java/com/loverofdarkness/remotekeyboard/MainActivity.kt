@@ -18,7 +18,14 @@ import android.text.TextWatcher
 import android.view.Gravity
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
-import android.widget.*
+import android.widget.ArrayAdapter
+import android.widget.Button
+import android.widget.EditText
+import android.widget.LinearLayout
+import android.widget.ScrollView
+import android.widget.Spinner
+import android.widget.Switch
+import android.widget.TextView
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -96,7 +103,6 @@ class MainActivity : Activity() {
         addButton(root, "Make phone discoverable") { makeDiscoverable() }
         addButton(root, "Connect selected") { connectSelected() }
         addButton(root, "Disconnect") { hid?.disconnect() }
-
         liveSwitch = Switch(this).apply {
             text = "Live typing"
             setTextColor(Color.WHITE)
@@ -109,7 +115,6 @@ class MainActivity : Activity() {
             setTextColor(0xFFBBBBBB.toInt())
             setPadding(0, dp(4), 0, dp(8))
         })
-
         editor = EditText(this).apply {
             hint = "Tap here to open your native keyboard"
             textSize = 18f
@@ -120,9 +125,7 @@ class MainActivity : Activity() {
             setHintTextColor(0xFF888888.toInt())
             setPadding(dp(16), dp(16), dp(16), dp(16))
             setBackgroundColor(0xFF181818.toInt())
-            inputType = android.text.InputType.TYPE_CLASS_TEXT or
-                android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE or
-                android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE or android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
             imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI
             filters = arrayOf(InputFilter.LengthFilter(1024))
             isEnabled = false
@@ -131,25 +134,12 @@ class MainActivity : Activity() {
         sendButton = addButton(root, "Send buffered text") { sendBufferedText() }
         sendButton.isEnabled = false
         addButton(root, "New buffer") { clearLocalBuffer() }
-
-        addKeyRow(root, listOf(
-            "Enter" to HidKeyMapper.ENTER,
-            "Backspace" to HidKeyMapper.BACKSPACE,
-            "Tab" to HidKeyMapper.TAB,
-            "Esc" to HidKeyMapper.ESC
-        ))
-        addKeyRow(root, listOf(
-            "←" to HidKeyMapper.LEFT,
-            "↑" to HidKeyMapper.UP,
-            "↓" to HidKeyMapper.DOWN,
-            "→" to HidKeyMapper.RIGHT
-        ))
-
+        addKeyRow(root, listOf("Enter" to HidKeyMapper.ENTER, "Backspace" to HidKeyMapper.BACKSPACE, "Tab" to HidKeyMapper.TAB, "Esc" to HidKeyMapper.ESC))
+        addKeyRow(root, listOf("←" to HidKeyMapper.LEFT, "↑" to HidKeyMapper.UP, "↓" to HidKeyMapper.DOWN, "→" to HidKeyMapper.RIGHT))
         liveSwitch.setOnCheckedChangeListener { _, checked ->
             clearLocalBuffer()
             sendButton.isEnabled = !checked && hid?.isConnected() == true
         }
-
         editor.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
@@ -169,7 +159,6 @@ class MainActivity : Activity() {
                 if (queueStrokes(strokes)) previousText = next else restorePreviousText()
             }
         })
-
         setContentView(ScrollView(this).apply {
             isFillViewport = true
             addView(root)
@@ -185,7 +174,6 @@ class MainActivity : Activity() {
             }
             if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
         }.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
-
         if (permissions.isEmpty()) startBluetooth()
         else requestPermissions(permissions.toTypedArray(), REQUEST_BLUETOOTH)
     }
@@ -227,8 +215,7 @@ class MainActivity : Activity() {
 
     private fun makeDiscoverable() {
         if (Build.VERSION.SDK_INT >= 31 && checkSelfPermission(Manifest.permission.BLUETOOTH_ADVERTISE) != PackageManager.PERMISSION_GRANTED) {
-            requestBluetoothPermissions()
-            return
+            requestBluetoothPermissions(); return
         }
         startActivity(Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE).apply {
             putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 300)
@@ -243,9 +230,7 @@ class MainActivity : Activity() {
             a.bondedDevices.forEach { devices[it.address] = it }
             refreshDeviceList()
             if (devices.isEmpty()) status.text = "No paired devices — make the phone discoverable and pair from laptop"
-        } catch (_: SecurityException) {
-            status.text = "Bluetooth permission required"
-        }
+        } catch (_: SecurityException) { status.text = "Bluetooth permission required" }
     }
 
     private fun startSearch() {
@@ -268,15 +253,23 @@ class MainActivity : Activity() {
     }
 
     private fun refreshDeviceList() {
-        val list = devices.values.sortedWith(compareByDescending<BluetoothDevice> { it.bondState == BluetoothDevice.BOND_BONDED }.thenBy { safeName(it) })
-        deviceSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, list.map { "${safeName(it)} • ${if (it.bondState == BluetoothDevice.BOND_BONDED) "Paired" else "Not paired"}" })
+        if (!::deviceSpinner.isInitialized) return
+        val list = devices.values.sortedWith(
+            compareByDescending<BluetoothDevice> { it.bondState == BluetoothDevice.BOND_BONDED }
+                .thenBy { safeName(it) }
+        )
+        val labels = list.map { d -> "${safeName(d)} • ${if (d.bondState == BluetoothDevice.BOND_BONDED) "Paired" else "Not paired"}" }
+        deviceSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, labels)
         deviceSpinner.tag = list
     }
 
     @Suppress("UNCHECKED_CAST")
     private fun connectSelected() {
         val list = deviceSpinner.tag as? List<BluetoothDevice> ?: emptyList()
-        val device = list.getOrNull(deviceSpinner.selectedItemPosition) ?: run { status.text = "Select a Bluetooth device first"; return }
+        val device = list.getOrNull(deviceSpinner.selectedItemPosition) ?: run {
+            status.text = "Select a Bluetooth device first"
+            return
+        }
         if (device.bondState != BluetoothDevice.BOND_BONDED) {
             status.text = "Pair this device first"
             try { device.createBond() } catch (t: Throwable) { status.text = "Pairing failed: ${t.javaClass.simpleName}" }
@@ -324,8 +317,20 @@ class MainActivity : Activity() {
         return true
     }
 
-    private fun clearLocalBuffer() { suppressChanges = true; editor.setText(""); previousText = ""; suppressChanges = false }
-    private fun restorePreviousText() { suppressChanges = true; editor.setText(previousText); editor.setSelection(editor.length()); suppressChanges = false }
+    private fun clearLocalBuffer() {
+        suppressChanges = true
+        editor.setText("")
+        previousText = ""
+        suppressChanges = false
+    }
+
+    private fun restorePreviousText() {
+        suppressChanges = true
+        editor.setText(previousText)
+        editor.setSelection(editor.length())
+        suppressChanges = false
+    }
+
     private fun isSupported(text: String): Boolean = text.all { strokeFor(it) != null }
     private fun strokeFor(c: Char): Stroke? = when (c) {
         '\n' -> Stroke(0, HidKeyMapper.ENTER)
@@ -336,10 +341,11 @@ class MainActivity : Activity() {
     private fun addKeyRow(parent: LinearLayout, keys: List<Pair<String, Int>>) {
         val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         keys.forEach { (label, usage) ->
-            row.addView(Button(this).apply {
+            val button = Button(this).apply {
                 text = label
                 setOnClickListener { if (queueStrokes(listOf(Stroke(0, usage)))) clearLocalBuffer() }
-            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            }
+            row.addView(button, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         }
         parent.addView(row)
     }
@@ -350,7 +356,8 @@ class MainActivity : Activity() {
         return button
     }
 
-    private fun safeName(device: BluetoothDevice): String = try { device.name?.takeIf { it.isNotBlank() } ?: device.address } catch (_: Throwable) { "Bluetooth device" }
+    private fun safeName(device: BluetoothDevice): String = try { device.name?.takeIf { it.isNotBlank() } ?: device.address }
+    catch (_: Throwable) { "Bluetooth device" }
 
     override fun onStart() {
         super.onStart()
@@ -385,7 +392,11 @@ class MainActivity : Activity() {
     }
 
     @Suppress("DEPRECATION")
-    private fun Intent.getParcelableExtraCompat(): BluetoothDevice? = if (Build.VERSION.SDK_INT >= 33) getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java) else getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+    private fun Intent.getParcelableExtraCompat(): BluetoothDevice? =
+        if (Build.VERSION.SDK_INT >= 33) getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
+        else getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+
     companion object { private const val REQUEST_BLUETOOTH = 77 }
 }
