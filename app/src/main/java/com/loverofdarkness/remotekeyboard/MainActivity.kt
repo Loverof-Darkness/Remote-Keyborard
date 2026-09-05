@@ -188,7 +188,8 @@ class MainActivity : Activity() {
         val device = list.getOrNull(deviceSpinner.selectedItemPosition) ?: run { status.text = "Select a Bluetooth device first"; return }
         if (device.bondState != BluetoothDevice.BOND_BONDED) { status.text = "Pair this device first"; try { device.createBond() } catch (t: Throwable) { status.text = "Pairing failed: ${t.javaClass.simpleName}" }; return }
         if (hid == null) startBluetooth()
-        status.text = "Connecting to ${safeName(device)}…"; hid?.connect(device)
+        status.text = "Connecting to ${safeName(device)}…"
+        hid?.connect(device)
     }
 
     private fun sendBufferedText() {
